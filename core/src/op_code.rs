@@ -21,6 +21,17 @@ pub enum RegisterPair {
     SP,
 }
 
+impl RegisterPair {
+    pub fn split(self) -> (Register, Register) {
+        match self {
+            RegisterPair::B => (Register::B, Register::C),
+            RegisterPair::D => (Register::D, Register::E),
+            RegisterPair::H => (Register::H, Register::L),
+            RegisterPair::SP => panic!("Do we ever need this?"),
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 pub enum Instruction {
     Aci(u8),
@@ -64,7 +75,7 @@ pub enum Instruction {
     Lda(u16),
     Ldax(RegisterPair),
     Lhld(u16),
-    Lxi(RegisterPair, u16),
+    Lxi(RegisterPair, u8, u8),
     Mov(Register, Register),
     Mvi(Register, u8),
     Nop,
@@ -118,23 +129,24 @@ pub enum OpCodeError {
 }
 
 impl Instruction {
-    pub fn read_at(data: &[u8], sp: usize) -> Result<Instruction> {
-        let op_code = *data.get(sp).ok_or(OpCodeError::EndOfDataInstr)?;
+    pub fn read_at(data: &[u8], pc: u16) -> Result<Instruction> {
+        let pc = pc as usize;
+        let op_code = *data.get(pc).ok_or(OpCodeError::EndOfDataInstr)?;
         let instruction_size = op_code_to_argsize(op_code)?;
         Ok(match instruction_size {
             1 => no_arg_op_code(op_code),
             2 => {
                 let arg = *data
-                    .get(sp + 1)
+                    .get(pc + 1)
                     .ok_or(OpCodeError::EndOfDataParam(op_code))?;
                 one_arg_op_code(op_code, arg)
             }
             3 => {
                 let arg1 = *data
-                    .get(sp + 1)
+                    .get(pc + 1)
                     .ok_or(OpCodeError::EndOfDataParam(op_code))?;
                 let arg2 = *data
-                    .get(sp + 2)
+                    .get(pc + 2)
                     .ok_or(OpCodeError::EndOfDataParam(op_code))?;
                 two_arg_op_code(op_code, arg1, arg2)
             }
@@ -142,10 +154,10 @@ impl Instruction {
         })
     }
 
-    pub fn cycles(self) -> usize {
+    pub fn cycles(self) -> u16 {
         use Instruction::*;
         match self {
-            Lxi(_, _)
+            Lxi(_, _, _)
             | Shld(_)
             | Lhld(_)
             | Sta(_)
@@ -233,12 +245,12 @@ fn two_arg_op_code(op_code: u8, arg1: u8, arg2: u8) -> Instruction {
     use Instruction::*;
     let addr = ((arg2 as u16) << 8) | (arg1 as u16);
     match op_code {
-        0x01 => Lxi(RegisterPair::B, addr),
-        0x11 => Lxi(RegisterPair::D, addr),
-        0x21 => Lxi(RegisterPair::H, addr),
+        0x01 => Lxi(RegisterPair::B, arg1, arg2),
+        0x11 => Lxi(RegisterPair::D, arg1, arg2),
+        0x21 => Lxi(RegisterPair::H, arg1, arg2),
         0x22 => Shld(addr),
         0x2a => Lhld(addr),
-        0x31 => Lxi(RegisterPair::SP, addr),
+        0x31 => Lxi(RegisterPair::SP, arg1, arg2),
         0x32 => Sta(addr),
         0x3a => Lda(addr),
         0xc2 => Jnz(addr),
@@ -491,7 +503,7 @@ fn no_arg_op_code(op_code: u8) -> Instruction {
         0xf9 => Sphl,
         0xfb => Ei,
         0xff => Rst(7),
-        _ => panic!("Yadda yadda"),
+        _ => Nop, //_ => panic!("Yadda yadda"),
     }
 }
 
@@ -741,7 +753,8 @@ fn op_code_to_argsize(op_code: u8) -> Result<usize, OpCodeError> {
         0xfc => 3,
         0xfe => 2,
         0xff => 1,
-        x => return Err(OpCodeError::WrongInstruction(x)),
+        x => 1,
+        //x => return Err(OpCodeError::WrongInstruction(x)),
     })
 }
 

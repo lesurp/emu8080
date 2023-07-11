@@ -1,3 +1,5 @@
+#![feature(generic_arg_infer)]
+
 use cpu_state::System;
 use std::env::args;
 use std::fs::File;
@@ -24,6 +26,7 @@ fn main() -> anyhow::Result<()> {
     let buf = BufReader::new(f);
 
     let game_data = buf.bytes().collect::<Result<Vec<_>, _>>()?;
+    //System::disassembly(&game_data)
     System::run_game(&game_data)
     /*
     while let Ok(instruction) = Instruction::from(&game_data) {}
