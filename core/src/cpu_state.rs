@@ -4,32 +4,37 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum MemoryError {
-    #[error("Trying to read ram outside the range: {0}")]
+    #[error("Trying to read ram outside the range: {0:#04x}")]
     OutOfBoundRead(u16),
 
-    #[error("Trying to read rom outside the range: {0}")]
+    #[error("Trying to read rom outside the range: {0:#04x}")]
     OutOfBoundReadRom(u16),
 
     #[error("Stack overflow")]
     StackOverflow,
 }
 
-#[derive(Default, Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct Cpu {
-    registers: [u8; 7],
+    registers: [u8; 8],
     sp: u16,
-    condition_flag: u8,
-    cy: bool,
-    ac: bool,
+}
+
+pub enum Flag {
+    S = 7,
+    Z = 6,
+    Ac = 4,
+    P = 2,
+    CY = 0,
 }
 
 fn to_u16(l: u8, h: u8) -> u16 {
     ((h as u16) << 8) | (l as u16)
 }
 
-fn add_u8(a: u8, b: u8) -> (u8, bool, bool) {
+fn add_u8(a: u8, b: u8) -> (u8, bool) {
     let out = a.wrapping_add(b);
-    (out, out < a, a < 8 && out >= 8)
+    (out, out < a)
 }
 
 fn add_u16(a: u16, b: u16) -> (u16, bool) {
@@ -37,14 +42,14 @@ fn add_u16(a: u16, b: u16) -> (u16, bool) {
     (out, out < a)
 }
 
-fn sub_u8(a: u8, b: u8) -> (u8, bool, bool) {
+fn sub_u8(a: u8, b: u8) -> (u8, bool) {
     let out = a.wrapping_sub(b);
-    (out, out < a, out < 8 && a >= 8)
+    (out, out > a)
 }
 
 fn sub_u16(a: u16, b: u16) -> (u16, bool) {
     let out = a.wrapping_sub(b);
-    (out, out < a)
+    (out, out > a)
 }
 
 fn to_u8(x: u16) -> (u8, u8) {
@@ -54,19 +59,97 @@ fn to_u8(x: u16) -> (u8, u8) {
 }
 
 impl Cpu {
-    fn get(&self, register: Register) -> u8 {
-        assert!(!matches!(register, Register::M));
-        self.registers[register as usize]
+    pub fn new() -> Self {
+        Cpu {
+            registers: [0; 8],
+            sp: 0xf000,
+        }
+    }
+
+    pub fn psw(&self) -> u16 {
+        to_u16(self.flags(), self.get(Register::A))
+    }
+
+    pub fn sp(&self) -> u16 {
+        self.sp
+    }
+
+    pub fn flags(&self) -> u8 {
+        self.get(Register::F)
+    }
+
+    pub fn flags_mut(&mut self) -> &mut u8 {
+        self.get_mut(Register::F)
+    }
+
+    fn z(&self) -> bool {
+        (self.flags() & 0x40) != 0
+    }
+
+    fn s(&self) -> bool {
+        (self.flags() & 0x80) != 0
+    }
+
+    fn p(&self) -> bool {
+        (self.flags() & 0x04) != 0
+    }
+
+    fn cy(&self) -> bool {
+        (self.flags() & 0x01) != 0
+    }
+
+    fn update_flags(&mut self, byte: u8) {
+        self.toggle(Flag::S, (byte as i8) < 0);
+        self.toggle(Flag::Z, byte == 0);
+        self.toggle(Flag::P, byte.count_ones() % 2 == 0);
+    }
+
+    fn update_flags_with_carry(&mut self, byte: u8, cy: bool) {
+        self.toggle(Flag::S, (byte as i8) < 0);
+        self.toggle(Flag::Z, byte == 0);
+        self.toggle(Flag::P, byte.count_ones() % 2 == 0);
+        self.toggle(Flag::CY, cy);
+    }
+
+    pub fn toggle(&mut self, bit: Flag, value: bool) {
+        if value {
+            self.set(bit)
+        } else {
+            self.clear(bit)
+        }
+    }
+
+    pub fn set(&mut self, bit: Flag) {
+        *self.flags_mut() |= 1 << (bit as u8);
+    }
+
+    pub fn clear(&mut self, bit: Flag) {
+        *self.flags_mut() &= !(1 << (bit as u8));
+    }
+
+    pub fn get_rp(&self, rp: RegisterPair) -> u16 {
+        let (h, l) = rp.split();
+        let (h, l) = (self.get(h), self.get(l));
+        to_u16(l, h)
+    }
+
+    pub fn get(&self, register: Register) -> u8 {
+        match register {
+            r @ Register::M => panic!("Cannot read register {:#?}", r),
+            r => self.registers[r as usize],
+        }
     }
 
     fn get_mut(&mut self, register: Register) -> &mut u8 {
-        assert!(!matches!(register, Register::M));
-        &mut self.registers[register as usize]
+        match register {
+            r @ Register::M => panic!("Cannot read register {:#?}", r),
+            r => &mut self.registers[r as usize],
+        }
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-struct Ram {
+pub struct Ram {
     ram: [u8; 0x2000],
     ram_offset: u16,
 }
@@ -99,30 +182,49 @@ impl<'a> System<'a> {
         loop {
             let instruction = Instruction::read_at(rom, pc)?;
             println!("{:04x}  {:x?}", pc, instruction);
-            pc += instruction.cycles();
+            pc += instruction.size();
         }
     }
 
-    pub fn run_game(rom: &'a [u8]) -> Result<()> {
+    pub fn run_game(rom: &'a [u8], max_instructions: Option<u32>) -> (Result<()>, Cpu, Ram) {
         let mut system = System {
-            cpu: Default::default(),
+            cpu: Cpu::new(),
             ram: Ram {
                 ram: [0; _],
                 ram_offset: 0x2000,
             },
             rom,
         };
+        let result = system.run_game_impl(rom, max_instructions);
+        (result, system.cpu, system.ram)
+    }
+
+    fn run_game_impl(&mut self, rom: &'a [u8], max_instructions: Option<u32>) -> Result<()> {
         let mut pc = 0;
+        let mut instructions = 0;
+        let max_instructions = max_instructions.unwrap_or(u32::MAX);
+        //let mut cycles = 0;
         loop {
             let instruction = Instruction::read_at(rom, pc)?;
-            println!("{:04x}  {:?}", pc, instruction);
-            pc = system.execute_instruction(instruction, pc)?;
+            println!("{:04x} {:#04} {:?}", pc, instructions, instruction);
+
+            instructions += 1;
+            //cycles += instruction.cycles() as u32;
+            if instructions > max_instructions {
+                return Err(anyhow::anyhow!(
+                    "Reached maximum instruction count ({} > {}), early failure (after ?? cycles).",
+                    instructions,
+                    max_instructions,
+                    //cycles,
+                ));
+            }
+            pc = self.execute_instruction(instruction, pc)?;
         }
     }
 
     fn execute_instruction(&mut self, instruction: Instruction, pc: u16) -> Result<u16> {
         use Instruction::*;
-        let pc = pc + instruction.cycles();
+        let pc = pc + instruction.size();
         match instruction {
             Nop => {}
             Jnz(addr) => {
@@ -131,6 +233,7 @@ impl<'a> System<'a> {
                 }
             }
             Push(rp) => self.push(rp)?,
+            Pop(rp) => self.pop(rp)?,
             Cpi(byte) => self.cpi(byte),
             Ret => return self.ret(),
             Dcr(reg) => self.dcr(reg),
@@ -143,6 +246,13 @@ impl<'a> System<'a> {
             Call(addr) => return self.call(addr, pc),
             Mvi(dst, val) => self.mvi(dst, val)?,
             Mov(dst, src) => self.mov(dst, src)?,
+            Xchg => self.xchg(),
+            PushPsw => self.push(RegisterPair::PSW)?,
+            PopPsw => self.pop(RegisterPair::PSW)?,
+            Rrc => self.rrc(),
+            Ani(byte) => self.ani(byte),
+            Adi(byte) => self.adi(byte),
+            Out(_val) => {}
             _ => unimplemented!("OP code {:?}", instruction),
         }
         Ok(pc)
@@ -156,12 +266,37 @@ impl<'a> System<'a> {
         Ok(())
     }
 
+    fn pop(&mut self, rp: RegisterPair) -> Result<()> {
+        let (h, l) = rp.split();
+        *self.cpu.get_mut(l) = self.ram.get(self.cpu.sp)?;
+        *self.cpu.get_mut(h) = self.ram.get(self.cpu.sp + 1)?;
+        self.cpu.sp += 2;
+        Ok(())
+    }
+
+    fn adi(&mut self, byte: u8) {
+        let a = self.cpu.get(Register::A);
+        let (a, cy) = add_u8(a, byte);
+        self.cpu.update_flags_with_carry(a, cy);
+        *self.cpu.get_mut(Register::A) = a;
+    }
+
+    fn ani(&mut self, byte: u8) {
+        let a = self.cpu.get(Register::A) & byte;
+        self.cpu.update_flags_with_carry(a, false);
+        *self.cpu.get_mut(Register::A) = a;
+    }
+
+    fn rrc(&mut self) {
+        let a = self.cpu.get(Register::A);
+        self.cpu.toggle(Flag::CY, (a & 1) == 1);
+        *self.cpu.get_mut(Register::A) = a.rotate_right(1);
+    }
+
     fn cpi(&mut self, byte: u8) {
         let a = self.cpu.get(Register::A);
-        let (cf, cy, ac) = sub_u8(a, byte);
-        self.cpu.condition_flag = cf;
-        self.cpu.cy = cy;
-        self.cpu.ac = ac;
+        let (f, cy) = sub_u8(a, byte);
+        self.cpu.update_flags_with_carry(f, cy);
     }
 
     fn ret(&mut self) -> Result<u16> {
@@ -173,10 +308,9 @@ impl<'a> System<'a> {
 
     fn dcr(&mut self, reg: Register) {
         let ptr = self.cpu.get_mut(reg);
-        let (val, _, ac) = sub_u8(*ptr, 1);
+        let (val, _) = sub_u8(*ptr, 1);
         *ptr = val;
-        self.cpu.condition_flag = val;
-        self.cpu.ac = ac;
+        self.cpu.update_flags(val);
     }
 
     fn inx(&mut self, rp: RegisterPair) {
@@ -205,9 +339,9 @@ impl<'a> System<'a> {
         let to_add_to = self.get_rp(RegisterPair::H);
         let (val, cy) = add_u16(to_add, to_add_to);
         let (h, l) = to_u8(val);
-        self.cpu.cy = cy;
-        *self.cpu.get_mut(Register::H) += h;
-        *self.cpu.get_mut(Register::L) += l;
+        self.cpu.toggle(Flag::CY, cy);
+        *self.cpu.get_mut(Register::H) = h;
+        *self.cpu.get_mut(Register::L) = l;
     }
 
     fn lxi(&mut self, rp: RegisterPair, lb: u8, hb: u8) {
@@ -239,6 +373,15 @@ impl<'a> System<'a> {
         Ok(())
     }
 
+    fn xchg(&mut self) {
+        let d = self.cpu.get(Register::D);
+        let e = self.cpu.get(Register::E);
+        *self.cpu.get_mut(Register::D) = self.cpu.get(Register::H);
+        *self.cpu.get_mut(Register::E) = self.cpu.get(Register::L);
+        *self.cpu.get_mut(Register::H) = d;
+        *self.cpu.get_mut(Register::L) = e;
+    }
+
     fn write(&mut self, dst: Register) -> Result<&mut u8> {
         Ok(if dst == Register::M {
             let address = self.get_rp(RegisterPair::H);
@@ -258,9 +401,7 @@ impl<'a> System<'a> {
     }
 
     fn get_rp(&self, rp: RegisterPair) -> u16 {
-        let (h, l) = rp.split();
-        let (h, l) = (self.cpu.get(h), self.cpu.get(l));
-        to_u16(l, h)
+        self.cpu.get_rp(rp)
     }
 
     fn get(&self, addr: u16) -> Result<u8, MemoryError> {
@@ -275,14 +416,28 @@ impl<'a> System<'a> {
     }
 
     fn z(&self) -> bool {
-        self.cpu.condition_flag == 0
+        self.cpu.z()
     }
 
     fn s(&self) -> bool {
-        (self.cpu.condition_flag as i8) < 0
+        self.cpu.s()
     }
 
     fn p(&self) -> bool {
-        self.cpu.condition_flag % 2 == 0
+        self.cpu.p()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sub_u8;
+
+    #[test]
+    fn overflow_sub() {
+        let a = 5;
+        let b = 255;
+        let (out, cy) = sub_u8(a, b);
+        assert_eq!(out, 6);
+        assert!(!cy);
     }
 }

@@ -1,5 +1,6 @@
 #![feature(generic_arg_infer)]
 
+use crate::op_code::{Register, RegisterPair};
 use cpu_state::System;
 use std::env::args;
 use std::fs::File;
@@ -27,36 +28,25 @@ fn main() -> anyhow::Result<()> {
 
     let game_data = buf.bytes().collect::<Result<Vec<_>, _>>()?;
     //System::disassembly(&game_data)
-    System::run_game(&game_data)
-    /*
-    while let Ok(instruction) = Instruction::from(&game_data) {}
-    let mut count: u64 = 0;
-    loop {
-        let byte = if let Some(b) = it.next() {
-            b?
-        } else {
-            break;
-        };
-
-        let op_code = Instruction::from(byte).unwrap_or_else(|| {
-            eprintln!("Op code {} is not a valid assembly instruction.", byte);
-            Instruction::Nop
-        });
-        let nb_arguments = op_code.cycles() - 1;
-        let arguments = it
-            .by_ref()
-            .take(nb_arguments as usize)
-            .collect::<Result<Vec<_>, std::io::Error>>()
-            .map_err(|_| Error::NotEnoughArguments)?;
-        let instruction = Instruction::new(op_code, arguments.clone());
-        println!(
-            "{:04x}\t{: <15}{}",
-            count,
-            instruction.op_code.instruction(),
-            instruction.format_args()
-        );
-        count += u64::from(op_code.cycles());
+    let max_instructions = args().map(|s| s.parse::<u32>().ok()).nth(2).flatten();
+    let (result, cpu, ram) = System::run_game(&game_data, max_instructions);
+    if result.is_err() {
+        println!("Dumping CPU state during execution error.");
+        println!("Registers:");
+        println!("\tA: {:#04x}", cpu.get(Register::A));
+        println!("\tF: {:#04x}", cpu.flags());
+        println!("\tB: {:#04x}", cpu.get(Register::B));
+        println!("\tC: {:#04x}", cpu.get(Register::C));
+        println!("\tD: {:#04x}", cpu.get(Register::D));
+        println!("\tE: {:#04x}", cpu.get(Register::E));
+        println!("\tH: {:#04x}", cpu.get(Register::H));
+        println!("\tL: {:#04x}", cpu.get(Register::L));
+        println!("Register pairs:");
+        println!("\tA: {:#06x}", cpu.psw());
+        println!("\tB: {:#06x}", cpu.get_rp(RegisterPair::B));
+        println!("\tD: {:#06x}", cpu.get_rp(RegisterPair::D));
+        println!("\tH: {:#06x}", cpu.get_rp(RegisterPair::H));
+        println!("SP: {:#06x}", cpu.sp());
     }
-    Ok(())
-    */
+    result
 }

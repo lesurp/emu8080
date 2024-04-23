@@ -4,6 +4,7 @@ use thiserror::Error;
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Register {
     A = 0,
+    F,
     B,
     C,
     D,
@@ -15,6 +16,7 @@ pub enum Register {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum RegisterPair {
+    PSW,
     B,
     D,
     H,
@@ -24,6 +26,7 @@ pub enum RegisterPair {
 impl RegisterPair {
     pub fn split(self) -> (Register, Register) {
         match self {
+            RegisterPair::PSW => (Register::A, Register::F),
             RegisterPair::B => (Register::B, Register::C),
             RegisterPair::D => (Register::D, Register::E),
             RegisterPair::H => (Register::H, Register::L),
@@ -154,7 +157,7 @@ impl Instruction {
         })
     }
 
-    pub fn cycles(self) -> u16 {
+    pub fn size(self) -> u16 {
         use Instruction::*;
         match self {
             Lxi(_, _, _)
@@ -753,22 +756,7 @@ fn op_code_to_argsize(op_code: u8) -> Result<usize, OpCodeError> {
         0xfc => 3,
         0xfe => 2,
         0xff => 1,
-        x => 1,
+        _x => 1,
         //x => return Err(OpCodeError::WrongInstruction(x)),
     })
 }
-
-/*
-    pub fn format_args(&self) -> String {
-        let extra_arg_str = match self.args {
-            Args::None => "".to_owned(),
-            Args::One(val) => format!("#${:02x}", val),
-            Args::Two(lb, hb) => {
-                let addr = ((hb as u16) << 8) | (lb as u16);
-                format!("${:04x}", addr)
-            }
-        };
-        self.op_code.instruction_details().to_owned() + &extra_arg_str
-    }
-}
-*/
