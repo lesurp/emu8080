@@ -1,12 +1,17 @@
 #![feature(generic_arg_infer)]
 
-use crate::op_code::{Register, RegisterPair};
+use anyhow::anyhow;
 use cpu_state::System;
+use in_out::InOut;
+use interrupts::Interrupt;
 use std::env::args;
 use std::fs::File;
 use std::io::{BufReader, Read};
+use std::sync::mpsc::Sender;
 
 mod cpu_state;
+mod in_out;
+mod interrupts;
 mod op_code;
 
 #[derive(thiserror::Error, Debug)]
@@ -21,32 +26,71 @@ pub enum Error {
     NotEnoughArguments,
 }
 
+struct Gui {
+    interrupt_tx: Sender<Interrupt>,
+}
+
+impl Gui {
+    pub fn new(interrupt_tx: Sender<Interrupt>) -> Self {
+        Gui { interrupt_tx }
+    }
+}
+
+impl InOut for Gui {
+    fn write(&self, port: in_out::OutPort, value: u8) {
+        todo!()
+    }
+
+    fn read(&self, port: in_out::InPort) -> u8 {
+        todo!()
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     let fname = args().nth(1).ok_or(Error::MissingCliArgument)?;
     let f = File::open(fname)?;
     let buf = BufReader::new(f);
 
-    let game_data = buf.bytes().collect::<Result<Vec<_>, _>>()?;
+    let rom = buf.bytes().collect::<Result<Vec<_>, _>>()?;
     //System::disassembly(&game_data)
-    let max_instructions = args().map(|s| s.parse::<u32>().ok()).nth(2).flatten();
-    let (result, cpu, ram) = System::run_game(&game_data, max_instructions);
-    if result.is_err() {
-        println!("Dumping CPU state during execution error.");
-        println!("Registers:");
-        println!("\tA: {:#04x}", cpu.get(Register::A));
-        println!("\tF: {:#04x}", cpu.flags());
-        println!("\tB: {:#04x}", cpu.get(Register::B));
-        println!("\tC: {:#04x}", cpu.get(Register::C));
-        println!("\tD: {:#04x}", cpu.get(Register::D));
-        println!("\tE: {:#04x}", cpu.get(Register::E));
-        println!("\tH: {:#04x}", cpu.get(Register::H));
-        println!("\tL: {:#04x}", cpu.get(Register::L));
-        println!("Register pairs:");
-        println!("\tA: {:#06x}", cpu.psw());
-        println!("\tB: {:#06x}", cpu.get_rp(RegisterPair::B));
-        println!("\tD: {:#06x}", cpu.get_rp(RegisterPair::D));
-        println!("\tH: {:#06x}", cpu.get_rp(RegisterPair::H));
-        println!("SP: {:#06x}", cpu.sp());
+
+    let mut system = System::new(&rom);
+
+    if let e @ Err(_) = main_impl(&mut system) {
+        system.dump_state();
+        e
+    } else {
+        Ok(())
     }
-    result
+}
+
+fn main_impl(system: &mut System) -> anyhow::Result<()> {
+    let mut instructions = 0;
+    let max_instructions = args()
+        .map(|s| s.parse::<u32>().ok())
+        .nth(2)
+        .flatten()
+        .unwrap_or(u32::MAX);
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let gui = Gui::new(tx);
+
+    loop {
+        let instruction = system.next_instruction()?;
+        if let e @ Err(_) = system.execute(instruction, &gui) {
+            return e;
+        }
+        instructions += 1;
+        if instructions > max_instructions {
+            return Err(anyhow!(
+                "Reached maximum instruction count ({} > {}), early failure (after ?? cycles).",
+                instructions,
+                max_instructions,
+            ));
+        }
+
+        while let Ok(interrupt) = rx.try_recv() {
+            system.process(interrupt, &gui)?;
+        }
+    }
 }
