@@ -1,4 +1,8 @@
-use crate::{in_out::InOut, interrupts::Interrupt, op_code::{Instruction, Register, RegisterPair}};
+use crate::{
+    in_out::{InOut, InPort},
+    interrupts::Interrupt,
+    op_code::{Instruction, Register, RegisterPair},
+};
 use anyhow::Result;
 use thiserror::Error;
 
@@ -22,6 +26,7 @@ pub struct Cpu {
     registers: [u8; 8],
     sp: u16,
     pc: u16,
+    inte: bool,
 }
 
 pub enum Flag {
@@ -63,11 +68,12 @@ fn to_u8(x: u16) -> (u8, u8) {
 }
 
 impl Cpu {
-    pub fn new() -> Self {
+    pub fn new(pc: u16) -> Self {
         Cpu {
             registers: [0; 8],
             sp: 0xf000,
-            pc: 0,
+            pc,
+            inte: false,
         }
     }
 
@@ -159,7 +165,7 @@ impl Cpu {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Ram {
-    ram: [u8; 0x2000],
+    ram: [u8; 0x4000],
     ram_offset: u16,
 }
 
@@ -169,6 +175,13 @@ impl Ram {
             .get((addr - self.ram_offset) as usize)
             .ok_or(MemoryError::OutOfBoundRead(addr))
             .copied()
+    }
+
+    fn get_slice(&self, addr: u16) -> Result<&[u8], MemoryError> {
+        self.ram
+            .split_at_checked((addr - self.ram_offset) as usize)
+            .ok_or(MemoryError::OutOfBoundRead(addr))
+            .map(|(_, s)| s)
     }
 
     fn get_mut(&mut self, addr: u16) -> Result<&mut u8, MemoryError> {
@@ -195,14 +208,15 @@ impl<'a> System<'a> {
         }
     }
 
-    pub fn new(rom: &'a [u8]) -> Self {
+    pub fn new(rom: &'a [u8], pc: u16, rom_offset: u16) -> Self {
         System {
-            cpu: Cpu::new(),
+            cpu: Cpu::new(pc),
             ram: Ram {
                 ram: [0; _],
                 ram_offset: 0x2000,
             },
             rom,
+            rom_offset,
         }
     }
 
@@ -223,21 +237,32 @@ impl<'a> System<'a> {
         println!("\tD: {:#06x}", self.cpu.get_rp(RegisterPair::D));
         println!("\tH: {:#06x}", self.cpu.get_rp(RegisterPair::H));
         println!("SP: {:#06x}", self.cpu.sp());
+        println!("Inte: {}", self.cpu.inte);
     }
 
-    pub fn next_instruction(&self) -> Result<Instruction>
-    {
+    pub fn next_instruction(&self) -> Result<Instruction> {
         Instruction::read_at(self.rom, self.cpu.pc)
     }
 
-    pub fn execute<IO: InOut>(&mut self, instruction: Instruction, io: &IO) -> Result<()> {
+    pub fn execute<IO: InOut>(&mut self, instruction: Instruction, io: &IO) -> Result<u8> {
         println!("{:04x} {:?}", self.cpu.pc, instruction);
         use Instruction::*;
         let mut pc = self.cpu.pc + instruction.size();
+        let mut cycles = instruction.cycles();
         match instruction {
             Nop => {}
             Jnz(addr) => {
                 if !self.z() {
+                    pc = addr;
+                }
+            }
+            Jpo(addr) => {
+                if !self.p() {
+                    pc = addr;
+                }
+            }
+            Jpe(addr) => {
+                if self.p() {
                     pc = addr;
                 }
             }
@@ -256,25 +281,30 @@ impl<'a> System<'a> {
             Mvi(dst, val) => self.mvi(dst, val)?,
             Mov(dst, src) => self.mov(dst, src)?,
             Xchg => self.xchg(),
-            PushPsw => self.push(RegisterPair::PSW)?,
-            PopPsw => self.pop(RegisterPair::PSW)?,
             Rrc => self.rrc(),
             Ani(byte) => self.ani(byte),
             Adi(byte) => self.adi(byte),
             Sta(addr) => self.sta(addr)?,
             Xra(dst) => self.xra(dst),
             Ana(dst) => self.ana(dst),
-            Out(byte) => self.output(byte)?,
-            In(byte) => self.input(byte)?,
-            Ei => {}
+            Out(byte) => self.output(byte, io)?,
+            In(byte) => self.input(byte, io)?,
+            Ei => self.cpu.inte = true,
+            Di => self.cpu.inte = false,
+            Pchl => pc = self.pchl(),
+            Rst(value) => pc = self.call(8 * value as u16, pc)?,
             _ => unimplemented!("OP code {:?}", instruction),
         }
         self.cpu.pc = pc;
-        Ok(())
+        Ok(cycles)
     }
 
-    pub fn process<IO: InOut>(&mut self, interrupt: Interrupt, io: &IO) -> Result<()> {
-        todo!()
+    pub fn process<IO: InOut>(&mut self, instruction: Instruction, io: &IO) -> Result<u8> {
+        if self.cpu.inte {
+            self.execute(instruction, io)
+        } else {
+            Ok(0)
+        }
     }
 
     fn push(&mut self, rp: RegisterPair) -> Result<()> {
@@ -293,12 +323,20 @@ impl<'a> System<'a> {
         Ok(())
     }
 
-    fn output(&mut self, byte: u8) -> Result<()> {
-        todo!()
+    fn pchl(&mut self) -> u16 {
+        let pcl = self.cpu.get(Register::L) as u16;
+        let pch = self.cpu.get(Register::H) as u16;
+        (pch << 8) + pcl
     }
 
-    fn input(&mut self, byte: u8) -> Result<()> {
-        todo!()
+    fn output<IO: InOut>(&mut self, byte: u8, io: &IO) -> Result<()> {
+        io.write(byte, self.cpu.get(Register::A));
+        Ok(())
+    }
+
+    fn input<IO: InOut>(&mut self, byte: u8, io: &IO) -> Result<()> {
+        *self.cpu.get_mut(Register::A) = io.read(byte);
+        Ok(())
     }
 
     fn sta(&mut self, addr: u16) -> Result<()> {
@@ -459,6 +497,10 @@ impl<'a> System<'a> {
                 .ok_or(MemoryError::OutOfBoundReadRom(addr))
                 .copied()
         }
+    }
+
+    pub fn get_slice(&self, addr: u16) -> Result<&[u8], MemoryError> {
+        self.ram.get_slice(addr)
     }
 
     fn get_mut(&mut self, addr: u16) -> Result<&mut u8, MemoryError> {

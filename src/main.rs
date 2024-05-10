@@ -1,3 +1,4 @@
+#![feature(split_at_checked)]
 #![feature(generic_arg_infer)]
 
 use anyhow::anyhow;
@@ -37,12 +38,12 @@ impl Gui {
 }
 
 impl InOut for Gui {
-    fn write(&self, port: in_out::OutPort, value: u8) {
-        todo!()
+    fn write(&self, port: u8, value: u8) {
+        //todo!()
     }
 
-    fn read(&self, port: in_out::InPort) -> u8 {
-        todo!()
+    fn read(&self, port: u8) -> u8 {
+        0
     }
 }
 
@@ -52,9 +53,9 @@ fn main() -> anyhow::Result<()> {
     let buf = BufReader::new(f);
 
     let rom = buf.bytes().collect::<Result<Vec<_>, _>>()?;
-    //System::disassembly(&game_data)
+    //System::disassembly(&rom);
 
-    let mut system = System::new(&rom);
+    let mut system = System::new(&rom, 0x100, 0x100);
 
     if let e @ Err(_) = main_impl(&mut system) {
         system.dump_state();
@@ -77,8 +78,8 @@ fn main_impl(system: &mut System) -> anyhow::Result<()> {
 
     loop {
         let instruction = system.next_instruction()?;
-        if let e @ Err(_) = system.execute(instruction, &gui) {
-            return e;
+        if let Err(e) = system.execute(instruction, &gui) {
+            return Err(e);
         }
         instructions += 1;
         if instructions > max_instructions {
@@ -89,8 +90,8 @@ fn main_impl(system: &mut System) -> anyhow::Result<()> {
             ));
         }
 
-        while let Ok(interrupt) = rx.try_recv() {
-            system.process(interrupt, &gui)?;
-        }
+        //while let Ok(interrupt) = rx.try_recv() {
+            //system.process(interrupt, &gui)?;
+        //}
     }
 }

@@ -23,6 +23,6 @@ pub enum InPort {
 }
 
 pub trait InOut {
-   fn write(&self, port: OutPort, value: u8);
-   fn read(&self, port: InPort) -> u8;
+   fn write(&self, port: u8, value: u8);
+   fn read(&self, port: u8) -> u8;
 }

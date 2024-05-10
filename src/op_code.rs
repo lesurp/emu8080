@@ -1,3 +1,5 @@
+use std::ops::Add;
+
 use anyhow::Result;
 use thiserror::Error;
 
@@ -87,9 +89,7 @@ pub enum Instruction {
     Out(u8),
     Pchl,
     Pop(RegisterPair),
-    PopPsw,
     Push(RegisterPair),
-    PushPsw,
     Ral,
     Rar,
     Rc,
@@ -155,6 +155,80 @@ impl Instruction {
             }
             _ => panic!("Yadda yadda"),
         })
+    }
+
+    pub fn cycles(self) -> u8 {
+        use Instruction::*;
+        match self {
+            Xthl => 18,
+            Call(_) => 17,
+            Shld(_) | Lhld(_) => 16,
+
+            Sta(_) | Lda(_) => 13,
+
+            Cc(_) | Cnc(_) | Cz(_) | Cnz(_) | Cp(_) | Cm(_) | Cpe(_) | Cpo(_) | Rst(_)
+            | Push(_) => 11,
+
+            Dad(_)
+            | Pop(_)
+            | In(_)
+            | Out(_)
+            | Lxi(_, _, _)
+            | Ret
+            | Jmp(_)
+            | Jc(_)
+            | Jnc(_)
+            | Jz(_)
+            | Jnz(_)
+            | Jp(_)
+            | Jm(_)
+            | Jpe(_)
+            | Jpo(_)
+            | Inr(Register::M)
+            | Dcr(Register::M)
+            | Mvi(Register::M, _) => 10,
+
+            Hlt
+            | Ldax(_)
+            | Stax(_)
+            | Add(Register::M)
+            | Adc(Register::M)
+            | Sub(Register::M)
+            | Sbb(Register::M)
+            | Xra(Register::M)
+            | Ora(Register::M)
+            | Cmp(Register::M)
+            | Adi(_)
+            | Aci(_)
+            | Sui(_)
+            | Sbi(_)
+            | Ani(_)
+            | Xri(_)
+            | Ori(_)
+            | Cpi(_)
+            | Mvi(_, _)
+            | Mov(Register::M, _)
+            | Mov(_, Register::M) => 7,
+
+            Pchl
+            | Sphl
+            | Rc
+            | Rnc
+            | Rz
+            | Rnz
+            | Rp
+            | Rm
+            | Rpe
+            | Rpo
+            | Dcx(_)
+            | Inx(_)
+            | Mov(_, _)
+            | Inr(_)
+            | Dcr(_) => 5,
+
+            Cmp(_) | Ana(_) | Nop | Cma | Stc | Cmc | Daa | Ei | Di | Rlc | Rrc | Ral | Rar
+            | Add(_) | Adc(_) | Sub(_) | Sbb(_) | Xra(_) | Ora(_) | Xchg => 4,
+        }
     }
 
     pub fn size(self) -> u16 {
@@ -233,9 +307,7 @@ impl Instruction {
             | Pchl
             | Xchg
             | Rp
-            | PopPsw
             | Di
-            | PushPsw
             | Rm
             | Sphl
             | Ei
@@ -498,9 +570,9 @@ fn no_arg_op_code(op_code: u8) -> Instruction {
         0xeb => Xchg,
         0xef => Rst(5),
         0xf0 => Rp,
-        0xf1 => PopPsw,
+        0xf1 => Pop(RegisterPair::PSW),
         0xf3 => Di,
-        0xf5 => PushPsw,
+        0xf5 => Push(RegisterPair::PSW),
         0xf7 => Rst(6),
         0xf8 => Rm,
         0xf9 => Sphl,
