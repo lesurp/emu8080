@@ -2,7 +2,7 @@
 #![feature(generic_arg_infer)]
 
 use anyhow::anyhow;
-use cpu_state::System;
+use cpu_state::{Ram, System};
 use in_out::InOut;
 use interrupts::Interrupt;
 use std::env::args;
@@ -55,7 +55,9 @@ fn main() -> anyhow::Result<()> {
     let rom = buf.bytes().collect::<Result<Vec<_>, _>>()?;
     //System::disassembly(&rom);
 
-    let mut system = System::new(&rom, 0x100, 0x100);
+    let mut ram = Ram::new(0x4000);
+    ram.register_rom(&rom, 0)?;
+    let mut system = System::new(ram, 0);
 
     if let e @ Err(_) = main_impl(&mut system) {
         system.dump_state();
@@ -78,6 +80,7 @@ fn main_impl(system: &mut System) -> anyhow::Result<()> {
 
     loop {
         let instruction = system.next_instruction()?;
+        println!("{:04x} {:?}", system.cpu().pc(), instruction);
         if let Err(e) = system.execute(instruction, &gui) {
             return Err(e);
         }

@@ -23,6 +23,15 @@ pub enum InPort {
 }
 
 pub trait InOut {
-   fn write(&self, port: u8, value: u8);
-   fn read(&self, port: u8) -> u8;
+    fn write(&self, port: u8, value: u8);
+    fn read(&self, port: u8) -> u8;
+}
+
+pub struct DummyInOut;
+impl InOut for DummyInOut {
+    fn write(&self, _: u8, _: u8) {}
+
+    fn read(&self, _: u8) -> u8 {
+        panic!("This is a dummy implementation, this should not actually be called!");
+    }
 }
