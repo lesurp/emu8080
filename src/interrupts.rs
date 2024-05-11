@@ -10,5 +10,4 @@ pub enum Interrupt {
     Eight = 8,
 }
 
-pub trait InterruptGenerator {
-}
+pub trait InterruptGenerator {}

@@ -59,7 +59,11 @@ fn add_u16(a: u16, b: u16) -> (u16, bool) {
 }
 
 fn sub_u8(a: u8, b: u8) -> (u8, bool, bool) {
-    let out = a.wrapping_sub(b);
+    sub_u8_with_cy(a, b, false)
+}
+
+fn sub_u8_with_cy(a: u8, b: u8, cy: bool) -> (u8, bool, bool) {
+    let out = a.wrapping_sub(b).wrapping_sub(if cy { 1 } else { 0 });
     let ac = (0x0f & a) + (0x0f & !b) > 0x0f;
     (out, out > a, ac)
 }
@@ -314,6 +318,11 @@ impl System {
         let mut cycles = instruction.cycles();
         match instruction {
             Nop => {}
+            Cz(addr) => {
+                if self.cpu.z() {
+                    pc = self.call(addr, pc)?;
+                }
+            }
             Jnz(addr) => {
                 if !self.cpu.z() {
                     pc = addr;
@@ -364,6 +373,21 @@ impl System {
                     pc = self.ret()?;
                 }
             }
+            Rpe => {
+                if self.cpu.p() {
+                    pc = self.ret()?;
+                }
+            }
+            Rc => {
+                if self.cpu.cy() {
+                    pc = self.ret()?;
+                }
+            }
+            Rnc => {
+                if !self.cpu.cy() {
+                    pc = self.ret()?;
+                }
+            }
             Push(rp) => self.push(rp)?,
             Pop(rp) => self.pop(rp)?,
             Cpi(byte) => self.cpi(byte),
@@ -389,10 +413,19 @@ impl System {
             Xra(dst) => self.xra(dst),
             Ana(dst) => self.ana(dst),
             Ora(dst) => self.ora(dst),
+            Ori(byte) => self.ori(byte),
             Out(byte) => self.output(byte, io)?,
             In(byte) => self.input(byte, io)?,
             Sui(byte) => self.sui(byte),
+            Sbb(reg) => self.sbb(reg)?,
+            Stax(rp) => self.stax(rp)?,
+            Stc => self.cpu.set(Flag::Cy),
+            Cmc => self.cpu.toggle(Flag::Cy, !self.cpu.cy()),
             Daa => self.daa(),
+            Rar => self.rar(),
+            Ral => self.ral(),
+            Lhld(addr) => self.lhld(addr)?,
+            Shld(addr) => self.shld(addr)?,
             Ei => self.cpu.inte = true,
             Di => self.cpu.inte = false,
             Pchl => pc = self.pchl(),
@@ -434,6 +467,18 @@ impl System {
         self.cpu.update_flags_with_carries(new_a, cy, ac);
     }
 
+    fn sbb(&mut self, reg: Register) -> Result<()> {
+        let (a, cy, ac) = sub_u8_with_cy(self.cpu.get(Register::A), self.get(reg)?, self.cpu.cy());
+        *self.cpu.get_mut(Register::A) = a;
+        self.cpu.update_flags_with_carries(a, cy, ac);
+        Ok(())
+    }
+
+    fn stax(&mut self, rp: RegisterPair) -> Result<()> {
+        *self.ram.get_mut(self.get_rp(rp))? = self.a();
+        Ok(())
+    }
+
     fn daa(&mut self) {
         let a = self.cpu.get(Register::A);
         let lower_bits = 0x0f & a;
@@ -451,6 +496,40 @@ impl System {
         let (a, cy, ac) = add_u8(a, 0x60);
         self.cpu.update_flags_with_carries(a, cy, ac);
         *self.cpu.get_mut(Register::A) = a;
+    }
+
+    fn ral(&mut self) {
+        let a = self.cpu.get(Register::A);
+        let next_cy = (0x80 & a) == 1;
+        let a = if self.cpu.cy() { (a << 1) | 1 } else { a << 1 };
+        self.cpu.toggle(Flag::Cy, next_cy);
+        *self.cpu.get_mut(Register::A) = a;
+    }
+
+    fn rar(&mut self) {
+        let a = self.cpu.get(Register::A);
+        let next_cy = (1 & a) == 1;
+        let a = if self.cpu.cy() {
+            (a >> 1) | 0x80
+        } else {
+            a >> 1
+        };
+        self.cpu.toggle(Flag::Cy, next_cy);
+        *self.cpu.get_mut(Register::A) = a;
+    }
+
+    fn lhld(&mut self, addr: u16) -> Result<()> {
+        let l = self.ram.get(addr)?;
+        let h = self.ram.get(addr + 1)?;
+        *self.cpu.get_mut(Register::L) = l;
+        *self.cpu.get_mut(Register::H) = h;
+        Ok(())
+    }
+
+    fn shld(&mut self, addr: u16) -> Result<()> {
+        *self.ram.get_mut(addr)? = self.cpu.get(Register::L);
+        *self.ram.get_mut(addr + 1)? = self.cpu.get(Register::H);
+        Ok(())
     }
 
     fn pchl(&mut self) -> u16 {
@@ -493,6 +572,12 @@ impl System {
         let b = self.cpu.get(dst);
         *self.cpu.get_mut(Register::A) = a | b;
         self.cpu.clear_all();
+    }
+
+    fn ori(&mut self, byte: u8) {
+        let a = byte | self.a();
+        self.cpu.update_flags_with_carry(a, false);
+        *self.a_mut() = a;
     }
 
     fn adi(&mut self, byte: u8) {
@@ -656,6 +741,13 @@ impl System {
         self.ram.get_slice(addr)
     }
 
+    pub fn get(&self, reg: Register) -> Result<u8, MemoryError> {
+        match reg {
+            Register::M => self.ram.get(self.cpu.get_rp(RegisterPair::H)),
+            _ => Ok(self.cpu.get(reg)),
+        }
+    }
+
     pub fn get_mut(&mut self, reg: Register) -> Result<&mut u8, MemoryError> {
         match reg {
             Register::M => self.ram.get_mut(self.cpu.get_rp(RegisterPair::H)),
@@ -669,6 +761,14 @@ impl System {
 
     pub fn ram(&self) -> &Ram {
         &self.ram
+    }
+
+    pub fn a(&self) -> u8 {
+        self.cpu.get(Register::A)
+    }
+
+    pub fn a_mut(&mut self) -> &mut u8 {
+        self.cpu.get_mut(Register::A)
     }
 }
 
@@ -700,13 +800,15 @@ mod tests {
         */
 
         let mut s = system();
-        s.execute(Instruction::Mvi(Register::A, 197), &DummyInOut).unwrap();
+        s.execute(Instruction::Mvi(Register::A, 197), &DummyInOut)
+            .unwrap();
         s.execute(Instruction::Sui(98), &DummyInOut).unwrap();
         assert!(!s.cpu().cy());
         assert_eq!(s.cpu().get(Register::A), 99);
 
         let mut s = system();
-        s.execute(Instruction::Mvi(Register::A, 12), &DummyInOut).unwrap();
+        s.execute(Instruction::Mvi(Register::A, 12), &DummyInOut)
+            .unwrap();
         s.execute(Instruction::Sui(15), &DummyInOut).unwrap();
         assert!(s.cpu().cy());
         assert_eq!(s.cpu().get(Register::A), -3i8 as u8);
@@ -722,7 +824,8 @@ mod tests {
         let mut s = system();
 
         // 1
-        s.execute(Instruction::Mvi(Register::A, llhs), &DummyInOut).unwrap();
+        s.execute(Instruction::Mvi(Register::A, llhs), &DummyInOut)
+            .unwrap();
         s.execute(Instruction::Adi(lrhs), &DummyInOut).unwrap();
         assert!(!s.cpu().cy());
         assert!(!s.cpu().ac());
@@ -734,7 +837,8 @@ mod tests {
         assert!(s.cpu().cy());
 
         // 3
-        s.execute(Instruction::Mvi(Register::A, ulhs), &DummyInOut).unwrap();
+        s.execute(Instruction::Mvi(Register::A, ulhs), &DummyInOut)
+            .unwrap();
         s.execute(Instruction::Aci(urhs), &DummyInOut).unwrap();
         assert!(!s.cpu().cy());
         assert!(s.cpu().ac());

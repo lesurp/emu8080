@@ -1,12 +1,14 @@
 <html>
-  <head>
-    <meta content="text/html;charset=utf-8" http-equiv="Content-Type"/>
-  </head>
-  <body>
-    <script type="module">
-      import init from './pkg/emulator101.js';
-      init();
-    </script>
-    <canvas tabindex='1' id="canvas" width="256" height="224"></canvas>
-  </body>
+    <head>
+        <meta content="text/html;charset=utf-8" http-equiv="Content-Type"/>
+    </head>
+    <body>
+        <script type="module">
+            import init, { space_invaders, cpu_test } from './pkg/emulator101.js';
+            init();
+        </script>
+        <canvas tabindex='1' id="canvas" width="256" height="224"></canvas>
+        <button onclick="space_invaders()">Space Invaders</button>
+        <button onclick="cpu_test()">CPU Test</button>
+    </body>
 </html>
