@@ -1,5 +1,3 @@
-use std::ops::Add;
-
 use anyhow::Result;
 use thiserror::Error;
 
@@ -132,7 +130,7 @@ pub enum OpCodeError {
 }
 
 impl Instruction {
-    pub fn read_at(data: &[u8], pc: u16) -> Result<Instruction> {
+    pub fn read_at(data: &[u8], pc: u16) -> Result<Instruction, OpCodeError> {
         let pc = pc as usize;
         let op_code = *data.get(pc).ok_or(OpCodeError::EndOfDataInstr)?;
         let instruction_size = op_code_to_argsize(op_code)?;
@@ -153,7 +151,7 @@ impl Instruction {
                     .ok_or(OpCodeError::EndOfDataParam(op_code))?;
                 two_arg_op_code(op_code, arg1, arg2)
             }
-            _ => panic!("Yadda yadda"),
+            _ => return Err(OpCodeError::WrongInstruction(op_code))
         })
     }
 

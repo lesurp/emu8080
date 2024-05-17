@@ -2,7 +2,8 @@
 #![feature(generic_arg_infer)]
 
 use std::rc::Rc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicUsize;
+use std::usize;
 use std::{cell::RefCell, sync::Mutex};
 use wasm_bindgen::{prelude::*, Clamped};
 
@@ -17,11 +18,32 @@ mod in_out;
 mod interrupts;
 mod op_code;
 
-static STOP_FLAG: AtomicBool = AtomicBool::new(false);
+#[repr(C)]
+enum RunState {
+    NotRunning = 0,
+    Running = 1,
+    Stopping = 2,
+}
+
+static STOP_FLAG: AtomicUsize = AtomicUsize::new(RunState::NotRunning as usize);
 
 fn stop_previous_game() {
-    STOP_FLAG.store(true, std::sync::atomic::Ordering::Release);
-    while STOP_FLAG.swap(true, std::sync::atomic::Ordering::Relaxed) {}
+    use std::sync::atomic::Ordering::*;
+
+    match STOP_FLAG.swap(RunState::Stopping as usize, Acquire) {
+        0 => {
+            STOP_FLAG.store(RunState::Running as usize, Release);
+        }
+        1 => {
+            while let Err(_) = STOP_FLAG.compare_exchange(
+                RunState::NotRunning as usize,
+                RunState::Running as usize,
+                AcqRel,
+                Relaxed,
+            ) {}
+        }
+        _ => unreachable!(),
+    }
 }
 
 fn dump_state(system: &System) {
@@ -57,6 +79,7 @@ impl SpaceInvadersPorts {
         self.ports.lock().unwrap()[port as usize] |= 1 << bit;
     }
 
+    #[allow(dead_code)]
     fn clear_input_bit(&self, port: usize, bit: u8) {
         self.ports.lock().unwrap()[port as usize] &= !(1 << bit);
     }
@@ -80,7 +103,9 @@ struct CpuTestPorts {
 impl InOut for CpuTestPorts {
     fn write(&self, port: u8, value: u8) {
         if port == 0 {
-            log_1(&format!("{}", value as char).into());
+            let div = document().get_element_by_id("console").unwrap();
+            let new_text = div.inner_html() + &format!("{}\n", value as char);
+            div.set_inner_html(&new_text);
         }
     }
 
@@ -116,6 +141,8 @@ fn canvas() -> web_sys::HtmlCanvasElement {
 
 #[wasm_bindgen]
 pub fn cpu_test() -> Result<(), JsValue> {
+    stop_previous_game();
+
     let mut ram = Ram::new(0x8000);
     let rom = include_bytes!("../roms/cputest");
     ram.register_rom(rom, 0x100).unwrap();
@@ -155,8 +182,11 @@ pub fn cpu_test() -> Result<(), JsValue> {
     let f = Rc::new(RefCell::new(None));
     let g = f.clone();
     *g.borrow_mut() = Some(Closure::new(move |current_time: f64| {
-        if STOP_FLAG.swap(false, std::sync::atomic::Ordering::Acquire) {
-            return;
+        if STOP_FLAG.load(std::sync::atomic::Ordering::Acquire) == RunState::Stopping as usize {
+            return STOP_FLAG.store(
+                RunState::NotRunning as usize,
+                std::sync::atomic::Ordering::Release,
+            );
         }
         emulator.game_js_loop(current_time);
         request_animation_frame(f.borrow().as_ref().unwrap());
@@ -289,8 +319,11 @@ pub fn space_invaders() -> Result<(), JsValue> {
     let f = Rc::new(RefCell::new(None));
     let g = f.clone();
     *g.borrow_mut() = Some(Closure::new(move |current_time: f64| {
-        if STOP_FLAG.swap(false, std::sync::atomic::Ordering::Acquire) {
-            return;
+        if STOP_FLAG.load(std::sync::atomic::Ordering::Acquire) == RunState::Stopping as usize {
+            return STOP_FLAG.store(
+                RunState::NotRunning as usize,
+                std::sync::atomic::Ordering::Release,
+            );
         }
         emulator.game_js_loop(current_time);
         request_animation_frame(f.borrow().as_ref().unwrap());

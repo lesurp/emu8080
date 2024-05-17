@@ -6,6 +6,10 @@ edition = "2021"
 [lib]
 crate-type = ["cdylib"]
 
+[[bin]]
+name = "disassembler"
+path = "src/disassembler.rs"
+
 [dependencies]
 anyhow = "1.0.71"
 thiserror = "1.0.40"

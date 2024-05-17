@@ -1,6 +1,12 @@
 #![feature(split_at_checked)]
 #![feature(generic_arg_infer)]
 
+mod cpu_state;
+mod in_out;
+mod interrupts;
+mod op_code;
+mod util;
+
 use anyhow::anyhow;
 use cpu_state::{Ram, System};
 use in_out::InOut;
@@ -9,23 +15,7 @@ use std::env::args;
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::sync::mpsc::Sender;
-
-mod cpu_state;
-mod in_out;
-mod interrupts;
-mod op_code;
-
-#[derive(thiserror::Error, Debug)]
-pub enum Error {
-    #[error("No input file given.")]
-    MissingCliArgument,
-
-    #[error("op code {0} is not a valid assembly instruction.")]
-    ReadError(u8),
-
-    #[error("Could not retrieve enough argument for instruction.")]
-    NotEnoughArguments,
-}
+use util::Error;
 
 struct Gui {
     interrupt_tx: Sender<Interrupt>,

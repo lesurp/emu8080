@@ -5,10 +5,18 @@
     <body>
         <script type="module">
             import init, { space_invaders, cpu_test } from './pkg/emulator101.js';
-            init();
+            async function run() {
+                await init();
+                document.getElementById("space_invaders").addEventListener('click', space_invaders);
+                document.getElementById("cpu_test").addEventListener('click', cpu_test);
+            }
+            run();
         </script>
+        <div>
+            <button id="space_invaders">Space Invaders</button>
+            <button id="cpu_test">CPU Test</button>
+        </div>
         <canvas tabindex='1' id="canvas" width="256" height="224"></canvas>
-        <button onclick="space_invaders()">Space Invaders</button>
-        <button onclick="cpu_test()">CPU Test</button>
+        <div id="console"></div>
     </body>
 </html>
