@@ -66,9 +66,6 @@ struct SpaceInvadersPorts {
 }
 
 impl SpaceInvadersPorts {
-    //pub fn new(interrupt_tx: Sender<Interrupt>) -> Self {
-    //Gui { interrupt_tx }
-    //}
     fn set_input_bit(&self, port: usize, bit: u8) {
         self.ports.lock().unwrap()[port as usize] |= 1 << bit;
     }
@@ -137,7 +134,7 @@ fn canvas() -> web_sys::HtmlCanvasElement {
 pub fn cpu_test() -> Result<(), JsValue> {
     stop_previous_game();
 
-    let mut ram = Ram::new(0x8000);
+    let mut ram = Ram::new(0x8000, true);
     let rom = include_bytes!("../roms/cputest");
     ram.register_rom(rom, 0x100).unwrap();
     // Shamelessly from: https://github.com/gergoerdi/clash-intel8080/blob/f2b09c5970efc0515f111b11d90c3ce648b648b6/test/Hardware/Intel8080/TestBench.hs#L20
@@ -301,7 +298,7 @@ pub fn space_invaders() -> Result<(), JsValue> {
         .dyn_into::<web_sys::CanvasRenderingContext2d>()
         .unwrap();
 
-    let mut ram = Ram::new(0x4000);
+    let mut ram = Ram::new(0x4000, false);
     let rom = include_bytes!("../roms/invaders");
     ram.register_rom(rom, 0).unwrap();
     let mut emulator = EmulatorClosureState::new(System::new(ram, 0), port_handler, context);

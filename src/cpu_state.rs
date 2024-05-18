@@ -180,13 +180,15 @@ impl Cpu {
 pub struct Ram {
     ram: Vec<u8>,
     rom_ranges: Vec<(usize, usize)>,
+    allow_rom_write: bool,
 }
 
 impl Ram {
-    pub fn new(ram_size: usize) -> Self {
+    pub fn new(ram_size: usize, allow_rom_write: bool) -> Self {
         Self {
             ram: vec![0; ram_size],
             rom_ranges: Vec::new(),
+            allow_rom_write,
         }
     }
 
@@ -234,12 +236,11 @@ impl Ram {
 
     fn get_mut(&mut self, addr: u16) -> Result<&mut u8> {
         let addr = addr as usize;
-        // TODO: apparently globals are stored in ROM...
-        //for (sr, length) in &self.rom_ranges {
-        //    if addr >= *sr && addr < *sr + *length {
-        //        return Err(MemoryError::ReadOnlyWrite(addr as u16));
-        //    }
-        //}
+        for (sr, length) in &self.rom_ranges {
+            if !self.allow_rom_write && addr >= *sr && addr < *sr + *length {
+                return Err(MemoryError::ReadOnlyWrite(addr as u16));
+            }
+        }
         self.ram
             .get_mut(addr)
             .ok_or(MemoryError::OutOfBoundRead(addr))
@@ -816,7 +817,7 @@ mod tests {
     use super::{MemoryError, Ram, System};
 
     fn system() -> System {
-        let ram = Ram::new(0x1000);
+        let ram = Ram::new(0x1000, false);
         let init_stack = Instruction::Lxi(RegisterPair::SP, 0, 0xff);
         let mut s = System::new(ram, 0);
         s.execute(init_stack, &DummyInOut).unwrap();
@@ -895,7 +896,7 @@ mod tests {
 
     #[test]
     fn rom_boundaries() {
-        let mut ram = Ram::new(100);
+        let mut ram = Ram::new(100, false);
         ram.register_rom(&[0; 10], 50).unwrap();
         ram.register_rom(&[0; 20], 60).unwrap();
 
@@ -930,7 +931,7 @@ mod tests {
 
     #[test]
     fn rom_overlap() {
-        let mut ram = Ram::new(100);
+        let mut ram = Ram::new(100, false);
         ram.register_rom(&[0; 10], 50).unwrap();
         assert_eq!(
             ram.register_rom(&[0; 20], 55),

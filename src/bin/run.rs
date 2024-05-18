@@ -30,7 +30,7 @@ fn main() -> anyhow::Result<()> {
     let rom = buf.bytes().collect::<Result<Vec<_>, _>>()?;
     //System::disassembly(&rom);
 
-    let mut ram = Ram::new(0x4000);
+    let mut ram = Ram::new(0x4000, false);
     ram.register_rom(&rom, 0)?;
     let mut system = System::new(ram, 0);
 
