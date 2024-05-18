@@ -18,7 +18,31 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Build
-      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh && rustup default nightly && wasm-pack build --target web
+      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh && rustup default nightly && wasm-pack build --target web && mkdir output && mv index.html pkg output
 
     - name: Run tests
       run: cargo test --verbose
+      
+    - name: Setup Pages
+      uses: actions/configure-pages@v3
+
+    - name: Upload artifact
+      uses: actions/upload-pages-artifact@v1
+      with:
+        path: "./output"
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v1
