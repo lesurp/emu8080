@@ -2,7 +2,7 @@
 #![feature(generic_arg_infer)]
 
 use anyhow::anyhow;
-use emulator101::{
+use emulator8080::{
     cpu_state::{Ram, System},
     in_out::DummyInOut,
 };

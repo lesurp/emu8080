@@ -1,7 +1,7 @@
 #![feature(split_at_checked)]
 #![feature(generic_arg_infer)]
 
-use emulator101::{cpu_state::System, op_code::OpCodeError};
+use emulator8080::{cpu_state::System, op_code::OpCodeError};
 use std::env::args;
 use std::fs::File;
 use std::io::{BufReader, Read};
