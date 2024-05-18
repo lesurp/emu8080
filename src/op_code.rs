@@ -35,7 +35,7 @@ impl RegisterPair {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum Instruction {
     Aci(u8),
     Adc(Register),

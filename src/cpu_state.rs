@@ -1,11 +1,9 @@
 use std::usize;
 
 use crate::{
-    in_out::{InOut, InPort},
-    interrupts::Interrupt,
+    in_out::InOut,
     op_code::{Instruction, OpCodeError, Register, RegisterPair},
 };
-use anyhow::{anyhow, Result};
 use thiserror::Error;
 
 #[derive(Error, Debug, PartialEq, Eq)]
@@ -21,6 +19,9 @@ pub enum MemoryError {
 
     #[error("Tried register ROM section at {0:#x}, with length of {1:#x} bytes, but total RAM is only {2:#x} bytes long.")]
     TooLongRomSection(usize, usize, usize),
+
+    #[error("Notn implemented instruction yet: {0:#?}")]
+    NotImplementedInstruction(Instruction),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -39,38 +40,15 @@ pub enum Flag {
     Cy = 0,
 }
 
+type Result<T, E = MemoryError> = std::result::Result<T, E>;
+
 fn to_u16(l: u8, h: u8) -> u16 {
     ((h as u16) << 8) | (l as u16)
-}
-
-fn add_u8(a: u8, b: u8) -> (u8, bool, bool) {
-    add_u8_with_cy(a, b, false)
-}
-
-fn add_u8_with_cy(a: u8, b: u8, cy: bool) -> (u8, bool, bool) {
-    let out = a.wrapping_add(b).wrapping_add(if cy { 1 } else { 0 });
-    let ac = (0x0f & a) + (0x0f & b) > 0x0f;
-    (out, out < a, ac)
 }
 
 fn add_u16(a: u16, b: u16) -> (u16, bool) {
     let out = a.wrapping_add(b);
     (out, out < a)
-}
-
-fn sub_u8(a: u8, b: u8) -> (u8, bool, bool) {
-    sub_u8_with_cy(a, b, false)
-}
-
-fn sub_u8_with_cy(a: u8, b: u8, cy: bool) -> (u8, bool, bool) {
-    let out = a.wrapping_sub(b).wrapping_sub(if cy { 1 } else { 0 });
-    let ac = (0x0f & a) + (0x0f & !b) > 0x0f;
-    (out, out > a, ac)
-}
-
-fn sub_u16(a: u16, b: u16) -> (u16, bool) {
-    let out = a.wrapping_sub(b);
-    (out, out > a)
 }
 
 fn to_u8(x: u16) -> (u8, u8) {
@@ -214,7 +192,7 @@ impl Ram {
         }
     }
 
-    pub fn register_rom(&mut self, rom: &[u8], offset: usize) -> Result<(), MemoryError> {
+    pub fn register_rom(&mut self, rom: &[u8], offset: usize) -> Result<()> {
         let s = offset;
         let e = s + rom.len();
         if e > self.ram.len() {
@@ -242,21 +220,21 @@ impl Ram {
         Ok(())
     }
 
-    fn get(&self, addr: u16) -> Result<u8, MemoryError> {
+    fn get(&self, addr: u16) -> Result<u8> {
         self.ram
             .get(addr as usize)
             .ok_or(MemoryError::OutOfBoundRead(addr as usize))
             .copied()
     }
 
-    fn get_slice(&self, addr: u16) -> Result<&[u8], MemoryError> {
+    fn get_slice(&self, addr: u16) -> Result<&[u8]> {
         self.ram
             .split_at_checked(addr as usize)
             .ok_or(MemoryError::OutOfBoundRead(addr as usize))
             .map(|(_, s)| s)
     }
 
-    fn get_mut(&mut self, addr: u16) -> Result<&mut u8, MemoryError> {
+    fn get_mut(&mut self, addr: u16) -> Result<&mut u8> {
         let addr = addr as usize;
         // TODO: apparently globals are stored in ROM...
         //for (sr, length) in &self.rom_ranges {
@@ -450,10 +428,10 @@ impl System {
             Pop(rp) => self.pop(rp)?,
             Cpi(byte) => self.cpi(byte),
             Ret => pc = self.ret()?,
-            Dcr(reg) => self.dcr(reg)?,
             Inx(rp) => self.inx(rp),
             Dcx(rp) => self.dcx(rp),
-            Inr(reg) => self.inr(reg)?,
+            Inr(reg) => self.incdec::<AddOp>(reg)?,
+            Dcr(reg) => self.incdec::<SubOp>(reg)?,
             Ldax(rp) => self.ldax(rp)?,
             Lda(addr) => self.lda(addr)?,
             Dad(rp) => self.dad(rp),
@@ -465,24 +443,24 @@ impl System {
             Xchg => self.xchg(),
             Xthl => self.xthl()?,
             Rrc => self.rrc(),
-            Ani(byte) => self.op_i::<And>(byte),
-            Adi(byte) => self.adi(byte),
-            Aci(byte) => self.aci(byte),
             Sta(addr) => self.sta(addr)?,
-            Xra(dst) => self.xra(dst)?,
-            Ana(dst) => self.ana(dst)?,
-            Ora(dst) => self.ora(dst)?,
+            Ana(dst) => self.op_r::<And>(dst)?,
+            Xra(dst) => self.op_r::<Xor>(dst)?,
+            Ora(dst) => self.op_r::<Or>(dst)?,
+            Ani(byte) => self.op_i::<And>(byte),
             Ori(byte) => self.op_i::<Or>(byte),
             Xri(byte) => self.op_i::<Xor>(byte),
             Out(byte) => self.output(byte, io)?,
             In(byte) => self.input(byte, io)?,
-            Sui(byte) => self.sui(byte),
-            Sbb(reg) => self.sbb(reg)?,
-            Adc(reg) => self.adc(reg)?,
-            Sbi(byte) => self.sbi(byte),
+            Adi(byte) => self.bin_i::<AddOp>(byte),
+            Sui(byte) => self.bin_i::<SubOp>(byte),
+            Sbb(reg) => self.bin_r_cy::<SubOp>(reg)?,
+            Adc(reg) => self.bin_r_cy::<AddOp>(reg)?,
+            Aci(byte) => self.bin_i_cy::<AddOp>(byte),
+            Sbi(byte) => self.bin_i_cy::<SubOp>(byte),
             Stax(rp) => self.stax(rp)?,
-            Add(reg) => self.add(reg)?,
-            Sub(reg) => self.sub(reg)?,
+            Add(reg) => self.bin_r::<AddOp>(reg)?,
+            Sub(reg) => self.bin_r::<SubOp>(reg)?,
             Cmp(reg) => self.cmp(reg)?,
             Stc => self.cpu.set(Flag::Cy),
             Cmc => self.cpu.toggle(Flag::Cy, !self.cpu.cy()),
@@ -496,7 +474,7 @@ impl System {
             Di => self.cpu.inte = false,
             Pchl => pc = self.pchl(),
             Rst(value) => pc = self.call(8 * value as u16, pc)?,
-            _ => return Err(anyhow!("OP code {:?}", instruction)),
+            _ => return Err(MemoryError::NotImplementedInstruction(instruction)),
         }
         self.cpu.pc = pc;
         Ok(cycles)
@@ -526,25 +504,23 @@ impl System {
         Ok(())
     }
 
-    fn sui(&mut self, byte: u8) {
-        let a = self.a_mut();
-        let (new_a, cy, ac) = sub_u8(*a, byte);
-        *a = new_a;
-        self.cpu.update_flags_with_carries(new_a, cy, ac);
-    }
-
-    fn sbb(&mut self, reg: Register) -> Result<()> {
-        let (a, cy, ac) = sub_u8_with_cy(self.a(), self.get(reg)?, self.cpu.cy());
-        *self.a_mut() = a;
-        self.cpu.update_flags_with_carries(a, cy, ac);
-        Ok(())
-    }
-
-    fn sbi(&mut self, byte: u8) {
+    fn bin_i<O: BinarytOp>(&mut self, byte: u8) {
         let a = self.a();
-        let (a, cy, ac) = sub_u8_with_cy(a, byte, self.cpu.cy());
+        let (a, cy, ac) = O::run(a, byte);
         self.cpu.update_flags_with_carries(a, cy, ac);
         *self.a_mut() = a;
+    }
+
+    fn bin_i_cy<O: BinarytOp>(&mut self, byte: u8) {
+        let a = self.a();
+        let (a, cy, ac) = O::run_with_carry(a, byte, self.cpu.cy());
+        self.cpu.update_flags_with_carries(a, cy, ac);
+        *self.a_mut() = a;
+    }
+
+    fn bin_r_cy<O: BinarytOp>(&mut self, reg: Register) -> Result<()> {
+        self.bin_i_cy::<O>(self.get(reg)?);
+        Ok(())
     }
 
     fn stax(&mut self, rp: RegisterPair) -> Result<()> {
@@ -558,7 +534,7 @@ impl System {
         if lower_bits <= 9 && !self.cpu.ac() {
             return;
         }
-        let (a, cy, ac) = add_u8(a, 6);
+        let (a, cy, ac) = AddOp::run(a, 6);
         let upper_bits = (0xf0 & a) >> 4;
         if upper_bits <= 9 && !self.cpu.cy() {
             self.cpu.update_flags_with_carries(a, cy, ac);
@@ -566,14 +542,14 @@ impl System {
             return;
         }
 
-        let (a, cy, ac) = add_u8(a, 0x60);
+        let (a, cy, ac) = AddOp::run(a, 0x60);
         self.cpu.update_flags_with_carries(a, cy, ac);
         *self.a_mut() = a;
     }
 
     fn ral(&mut self) {
         let a = self.a();
-        let next_cy = (0x80 & a) == 1;
+        let next_cy = (0x80 & a) != 0;
         let a = if self.cpu.cy() { (a << 1) | 1 } else { a << 1 };
         self.cpu.toggle(Flag::Cy, next_cy);
         *self.a_mut() = a;
@@ -581,7 +557,7 @@ impl System {
 
     fn rlc(&mut self) {
         let a = self.a();
-        let next_cy = (0x80 & a) == 1;
+        let next_cy = (0x80 & a) != 0;
         let a = if next_cy { (a << 1) | 1 } else { a << 1 };
         self.cpu.toggle(Flag::Cy, next_cy);
         *self.a_mut() = a;
@@ -634,75 +610,27 @@ impl System {
         Ok(())
     }
 
-    fn xra(&mut self, dst: Register) -> Result<()> {
-        *self.a_mut() = self.a() ^ self.get(dst)?;
-        self.cpu.update_flags(self.a());
-        self.cpu.clear(Flag::Cy);
+    fn op_r<O: BitwiseOp>(&mut self, reg: Register) -> Result<()> {
+        self.op_i::<O>(self.get(reg)?);
         Ok(())
     }
 
-    fn ana(&mut self, dst: Register) -> Result<()> {
-        *self.a_mut() = self.a() & self.get(dst)?;
-        self.cpu.update_flags(self.a());
-        self.cpu.clear(Flag::Cy);
-        Ok(())
-    }
-
-    fn ora(&mut self, dst: Register) -> Result<()> {
-        *self.a_mut() = self.a() | self.get(dst)?;
-        self.cpu.update_flags(self.a());
-        self.cpu.clear(Flag::Cy);
-        Ok(())
-    }
-
-    fn op_i<O: BinaryOp>(&mut self, byte: u8) {
+    fn op_i<O: BitwiseOp>(&mut self, byte: u8) {
         let a = O::run(byte, self.a());
         self.cpu.update_flags_with_carry(a, false);
         *self.a_mut() = a;
     }
 
-    fn adi(&mut self, byte: u8) {
+    fn bin_r<O: BinarytOp>(&mut self, reg: Register) -> Result<()> {
         let a = self.a();
-        let (a, cy, ac) = add_u8(a, byte);
-        self.cpu.update_flags_with_carries(a, cy, ac);
-        *self.a_mut() = a;
-    }
-
-    fn adc(&mut self, reg: Register) -> Result<(), MemoryError> {
-        let a = self.a();
-        let (a, cy, ac) = add_u8_with_cy(a, self.get(reg)?, self.cpu.cy());
-        self.cpu.update_flags_with_carries(a, cy, ac);
-        *self.a_mut() = a;
-        Ok(())
-    }
-
-    fn aci(&mut self, byte: u8) {
-        let a = self.a();
-        let (a, cy, ac) = add_u8_with_cy(a, byte, self.cpu.cy());
-        self.cpu.update_flags_with_carries(a, cy, ac);
-        *self.a_mut() = a;
-    }
-
-    fn add(&mut self, reg: Register) -> Result<()> {
-        let a = self.a();
-        let (a, cy, ac) = add_u8(a, self.get(reg)?);
-        self.cpu.update_flags_with_carries(a, cy, ac);
-        *self.a_mut() = a;
-        Ok(())
-    }
-
-    fn sub(&mut self, reg: Register) -> Result<()> {
-        let a = self.a();
-        let (a, cy, ac) = sub_u8(a, self.get(reg)?);
+        let (a, cy, ac) = O::run(a, self.get(reg)?);
         self.cpu.update_flags_with_carries(a, cy, ac);
         *self.a_mut() = a;
         Ok(())
     }
 
     fn cmp(&mut self, reg: Register) -> Result<()> {
-        let a = self.a();
-        let (a, cy, ac) = sub_u8(a, self.get(reg)?);
-        self.cpu.update_flags_with_carries(a, cy, ac);
+        self.cpi(self.get(reg)?);
         Ok(())
     }
 
@@ -714,7 +642,7 @@ impl System {
 
     fn cpi(&mut self, byte: u8) {
         let a = self.a();
-        let (f, cy, ac) = sub_u8(a, byte);
+        let (f, cy, ac) = SubOp::run(a, byte);
         self.cpu.update_flags_with_carries(f, cy, ac);
     }
 
@@ -723,14 +651,6 @@ impl System {
         let h = self.ram.get(self.cpu.sp + 1)?;
         self.cpu.sp += 2;
         Ok(to_u16(l, h))
-    }
-
-    fn dcr(&mut self, reg: Register) -> Result<()> {
-        let ptr = self.get_mut(reg)?;
-        let (val, _, ac) = sub_u8(*ptr, 1);
-        *ptr = val;
-        self.cpu.update_flags_with_ac(val, ac);
-        Ok(())
     }
 
     fn inx(&mut self, rp: RegisterPair) {
@@ -755,9 +675,9 @@ impl System {
         }
     }
 
-    fn inr(&mut self, reg: Register) -> Result<()> {
+    fn incdec<O: BinarytOp>(&mut self, reg: Register) -> Result<()> {
         let ptr = self.get_mut(reg)?;
-        let (val, _, ac) = add_u8(*ptr, 1);
+        let (val, _, ac) = O::run(*ptr, 1);
         *ptr = val;
         self.cpu.update_flags_with_ac(val, ac);
         Ok(())
@@ -853,18 +773,18 @@ impl System {
         self.cpu.get_rp(rp)
     }
 
-    pub fn get_slice(&self, addr: u16) -> Result<&[u8], MemoryError> {
+    pub fn get_slice(&self, addr: u16) -> Result<&[u8]> {
         self.ram.get_slice(addr)
     }
 
-    pub fn get(&self, reg: Register) -> Result<u8, MemoryError> {
+    pub fn get(&self, reg: Register) -> Result<u8> {
         match reg {
             Register::M => self.ram.get(self.cpu.get_rp(RegisterPair::H)),
             _ => Ok(self.cpu.get(reg)),
         }
     }
 
-    pub fn get_mut(&mut self, reg: Register) -> Result<&mut u8, MemoryError> {
+    pub fn get_mut(&mut self, reg: Register) -> Result<&mut u8> {
         match reg {
             Register::M => self.ram.get_mut(self.cpu.get_rp(RegisterPair::H)),
             _ => Ok(self.cpu.get_mut(reg)),
@@ -888,7 +808,7 @@ impl System {
     }
 }
 
-trait BinaryOp {
+trait BitwiseOp {
     fn run(lhs: u8, rhs: u8) -> u8;
 }
 
@@ -896,21 +816,47 @@ struct Xor;
 struct Or;
 struct And;
 
-impl BinaryOp for Xor {
+impl BitwiseOp for Xor {
     fn run(lhs: u8, rhs: u8) -> u8 {
         lhs ^ rhs
     }
 }
 
-impl BinaryOp for And {
+impl BitwiseOp for And {
     fn run(lhs: u8, rhs: u8) -> u8 {
         lhs & rhs
     }
 }
 
-impl BinaryOp for Or {
+impl BitwiseOp for Or {
     fn run(lhs: u8, rhs: u8) -> u8 {
         lhs | rhs
+    }
+}
+
+trait BinarytOp {
+    fn run(lhs: u8, rhs: u8) -> (u8, bool, bool) {
+        Self::run_with_carry(lhs, rhs, false)
+    }
+    fn run_with_carry(lhs: u8, rhs: u8, cy: bool) -> (u8, bool, bool);
+}
+
+struct AddOp;
+struct SubOp;
+
+impl BinarytOp for AddOp {
+    fn run_with_carry(a: u8, b: u8, cy: bool) -> (u8, bool, bool) {
+        let out = a.wrapping_add(b).wrapping_add(if cy { 1 } else { 0 });
+        let ac = (0x0f & a) + (0x0f & b) > 0x0f;
+        (out, out < a, ac)
+    }
+}
+
+impl BinarytOp for SubOp {
+    fn run_with_carry(a: u8, b: u8, cy: bool) -> (u8, bool, bool) {
+        let out = a.wrapping_sub(b).wrapping_sub(if cy { 1 } else { 0 });
+        let ac = (0x0f & a) + (0x0f & !b) > 0x0f;
+        (out, out > a, ac)
     }
 }
 
@@ -933,14 +879,6 @@ mod tests {
 
     #[test]
     fn overflow_sub_page_13() {
-        /*
-        let a = 5;
-        let b = 255;
-        let (out, cy, _) = sub_u8(a, b);
-        assert_eq!(out, 6);
-        assert!(!cy);
-        */
-
         let mut s = system();
         s.execute(Instruction::Mvi(Register::A, 197), &DummyInOut)
             .unwrap();
