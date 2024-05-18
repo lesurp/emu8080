@@ -18,7 +18,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Build
-      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh && wasm-pack build --target web
+      run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh && rustup default nightly && wasm-pack build --target web
 
     - name: Run tests
       run: cargo test --verbose
