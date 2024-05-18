@@ -151,7 +151,7 @@ impl Instruction {
                     .ok_or(OpCodeError::EndOfDataParam(op_code))?;
                 two_arg_op_code(op_code, arg1, arg2)
             }
-            _ => return Err(OpCodeError::WrongInstruction(op_code))
+            _ => return Err(OpCodeError::WrongInstruction(op_code)),
         })
     }
 

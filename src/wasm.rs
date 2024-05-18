@@ -6,7 +6,7 @@ use wasm_bindgen::{prelude::*, Clamped};
 use crate::{
     cpu_state::{Ram, System},
     in_out::InOut,
-    op_code::{Register, RegisterPair, Instruction},
+    op_code::{Instruction, Register, RegisterPair},
 };
 
 use web_sys::console::log_1;
