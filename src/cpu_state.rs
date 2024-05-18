@@ -105,6 +105,10 @@ impl Cpu {
         self.sp
     }
 
+    pub fn a(&self) -> u8 {
+        self.get(Register::A)
+    }
+
     pub fn flags(&self) -> u8 {
         self.get(Register::F)
     }
@@ -461,15 +465,15 @@ impl System {
             Xchg => self.xchg(),
             Xthl => self.xthl()?,
             Rrc => self.rrc(),
-            Ani(byte) => self.ani(byte),
+            Ani(byte) => self.op_i::<And>(byte),
             Adi(byte) => self.adi(byte),
             Aci(byte) => self.aci(byte),
             Sta(addr) => self.sta(addr)?,
             Xra(dst) => self.xra(dst)?,
             Ana(dst) => self.ana(dst)?,
             Ora(dst) => self.ora(dst)?,
-            Ori(byte) => self.ori(byte),
-            Xri(byte) => self.xri(byte),
+            Ori(byte) => self.op_i::<Or>(byte),
+            Xri(byte) => self.op_i::<Xor>(byte),
             Out(byte) => self.output(byte, io)?,
             In(byte) => self.input(byte, io)?,
             Sui(byte) => self.sui(byte),
@@ -485,6 +489,7 @@ impl System {
             Daa => self.daa(),
             Rar => self.rar(),
             Ral => self.ral(),
+            Rlc => self.rlc(),
             Lhld(addr) => self.lhld(addr)?,
             Shld(addr) => self.shld(addr)?,
             Ei => self.cpu.inte = true,
@@ -555,7 +560,7 @@ impl System {
         }
         let (a, cy, ac) = add_u8(a, 6);
         let upper_bits = (0xf0 & a) >> 4;
-        if upper_bits <= 9 && !cy {
+        if upper_bits <= 9 && !self.cpu.cy() {
             self.cpu.update_flags_with_carries(a, cy, ac);
             *self.a_mut() = a;
             return;
@@ -570,6 +575,14 @@ impl System {
         let a = self.a();
         let next_cy = (0x80 & a) == 1;
         let a = if self.cpu.cy() { (a << 1) | 1 } else { a << 1 };
+        self.cpu.toggle(Flag::Cy, next_cy);
+        *self.a_mut() = a;
+    }
+
+    fn rlc(&mut self) {
+        let a = self.a();
+        let next_cy = (0x80 & a) == 1;
+        let a = if next_cy { (a << 1) | 1 } else { a << 1 };
         self.cpu.toggle(Flag::Cy, next_cy);
         *self.a_mut() = a;
     }
@@ -642,14 +655,8 @@ impl System {
         Ok(())
     }
 
-    fn ori(&mut self, byte: u8) {
-        let a = byte | self.a();
-        self.cpu.update_flags_with_carry(a, false);
-        *self.a_mut() = a;
-    }
-
-    fn xri(&mut self, byte: u8) {
-        let a = byte ^ self.a();
+    fn op_i<O: BinaryOp>(&mut self, byte: u8) {
+        let a = O::run(byte, self.a());
         self.cpu.update_flags_with_carry(a, false);
         *self.a_mut() = a;
     }
@@ -673,12 +680,6 @@ impl System {
         let a = self.a();
         let (a, cy, ac) = add_u8_with_cy(a, byte, self.cpu.cy());
         self.cpu.update_flags_with_carries(a, cy, ac);
-        *self.a_mut() = a;
-    }
-
-    fn ani(&mut self, byte: u8) {
-        let a = self.a() & byte;
-        self.cpu.update_flags_with_carry(a, false);
         *self.a_mut() = a;
     }
 
@@ -887,6 +888,32 @@ impl System {
     }
 }
 
+trait BinaryOp {
+    fn run(lhs: u8, rhs: u8) -> u8;
+}
+
+struct Xor;
+struct Or;
+struct And;
+
+impl BinaryOp for Xor {
+    fn run(lhs: u8, rhs: u8) -> u8 {
+        lhs ^ rhs
+    }
+}
+
+impl BinaryOp for And {
+    fn run(lhs: u8, rhs: u8) -> u8 {
+        lhs & rhs
+    }
+}
+
+impl BinaryOp for Or {
+    fn run(lhs: u8, rhs: u8) -> u8 {
+        lhs | rhs
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -963,6 +990,23 @@ mod tests {
         s.execute(Instruction::Daa, &DummyInOut).unwrap();
         assert_eq!(s.cpu().get(Register::A), 0x79);
         assert!(!s.cpu().cy());
+    }
+
+    #[test]
+    fn daa_auto_test_5a3() {
+        let a = 0x88;
+        let cpi = 0x76;
+
+        let mut s = system();
+        // 1
+        s.execute(Instruction::Mvi(Register::A, a), &DummyInOut)
+            .unwrap();
+        s.execute(Instruction::Add(Register::A), &DummyInOut)
+            .unwrap();
+        s.execute(Instruction::Daa, &DummyInOut).unwrap();
+        s.execute(Instruction::Cpi(cpi), &DummyInOut).unwrap();
+        //assert!(s.cpu().z());
+        assert_eq!(s.cpu().a(), cpi);
     }
 
     #[test]
