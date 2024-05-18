@@ -1,5 +1,3 @@
-use std::usize;
-
 use crate::{
     in_out::InOut,
     op_code::{Instruction, OpCodeError, Register, RegisterPair},
@@ -20,7 +18,7 @@ pub enum MemoryError {
     #[error("Tried register ROM section at {0:#x}, with length of {1:#x} bytes, but total RAM is only {2:#x} bytes long.")]
     TooLongRomSection(usize, usize, usize),
 
-    #[error("Notn implemented instruction yet: {0:#?}")]
+    #[error("Instruction not yet implemented: {0:#?}")]
     NotImplementedInstruction(Instruction),
 }
 
@@ -301,133 +299,41 @@ impl System {
         let mut cycles = instruction.cycles();
         match instruction {
             Nop => {}
-            Cc(addr) => {
-                if self.cpu.cy() {
-                    pc = self.call(addr, pc)?;
-                }
-            }
-            Cm(addr) => {
-                if self.cpu.s() {
-                    pc = self.call(addr, pc)?;
-                }
-            }
-            Cp(addr) => {
-                if !self.cpu.s() {
-                    pc = self.call(addr, pc)?;
-                }
-            }
-            Cnc(addr) => {
-                if !self.cpu.cy() {
-                    pc = self.call(addr, pc)?;
-                }
-            }
-            Cpo(addr) => {
-                if !self.cpu.p() {
-                    pc = self.call(addr, pc)?;
-                }
-            }
-            Cpe(addr) => {
-                if self.cpu.p() {
-                    pc = self.call(addr, pc)?;
-                }
-            }
-            Cnz(addr) => {
-                if !self.cpu.z() {
-                    pc = self.call(addr, pc)?;
-                }
-            }
-            Cz(addr) => {
-                if self.cpu.z() {
-                    pc = self.call(addr, pc)?;
-                }
-            }
 
-            Jnz(addr) => {
-                if !self.cpu.z() {
-                    pc = addr;
-                }
-            }
-            Jz(addr) => {
-                if self.cpu.z() {
-                    pc = addr;
-                }
-            }
-            Jc(addr) => {
-                if self.cpu.cy() {
-                    pc = addr;
-                }
-            }
-            Jnc(addr) => {
-                if !self.cpu.cy() {
-                    pc = addr;
-                }
-            }
-            Jpo(addr) => {
-                if !self.cpu.p() {
-                    pc = addr;
-                }
-            }
-            Jpe(addr) => {
-                if self.cpu.p() {
-                    pc = addr;
-                }
-            }
-            Jm(addr) => {
-                if self.cpu.s() {
-                    pc = addr;
-                }
-            }
-            Jp(addr) => {
-                if !self.cpu.s() {
-                    pc = addr;
-                }
-            }
+            Call(addr) => pc = self.call(addr, pc)?,
+            Cz(addr) => (pc, cycles) = self.call_test(addr, pc, self.cpu.z())?,
+            Cnz(addr) => (pc, cycles) = self.call_test(addr, pc, !self.cpu.z())?,
+            Cm(addr) => (pc, cycles) = self.call_test(addr, pc, self.cpu.s())?,
+            Cp(addr) => (pc, cycles) = self.call_test(addr, pc, !self.cpu.s())?,
+            Cpe(addr) => (pc, cycles) = self.call_test(addr, pc, self.cpu.p())?,
+            Cpo(addr) => (pc, cycles) = self.call_test(addr, pc, !self.cpu.p())?,
+            Cc(addr) => (pc, cycles) = self.call_test(addr, pc, self.cpu.cy())?,
+            Cnc(addr) => (pc, cycles) = self.call_test(addr, pc, !self.cpu.cy())?,
 
-            Rz => {
-                if self.cpu.z() {
-                    pc = self.ret()?;
-                }
-            }
-            Rm => {
-                if self.cpu.s() {
-                    pc = self.ret()?;
-                }
-            }
-            Rp => {
-                if !self.cpu.s() {
-                    pc = self.ret()?;
-                }
-            }
-            Rnz => {
-                if !self.cpu.z() {
-                    pc = self.ret()?;
-                }
-            }
-            Rpe => {
-                if self.cpu.p() {
-                    pc = self.ret()?;
-                }
-            }
-            Rpo => {
-                if !self.cpu.p() {
-                    pc = self.ret()?;
-                }
-            }
-            Rc => {
-                if self.cpu.cy() {
-                    pc = self.ret()?;
-                }
-            }
-            Rnc => {
-                if !self.cpu.cy() {
-                    pc = self.ret()?;
-                }
-            }
+            Jmp(addr) => pc = addr,
+            Jz(addr) => pc = self.jmp_test(addr, pc, self.cpu.z()),
+            Jnz(addr) => pc = self.jmp_test(addr, pc, !self.cpu.z()),
+            Jm(addr) => pc = self.jmp_test(addr, pc, self.cpu.s()),
+            Jp(addr) => pc = self.jmp_test(addr, pc, !self.cpu.s()),
+            Jpe(addr) => pc = self.jmp_test(addr, pc, self.cpu.p()),
+            Jpo(addr) => pc = self.jmp_test(addr, pc, !self.cpu.p()),
+            Jc(addr) => pc = self.jmp_test(addr, pc, self.cpu.cy()),
+            Jnc(addr) => pc = self.jmp_test(addr, pc, !self.cpu.cy()),
+
+            Ret => pc = self.ret()?,
+            Rz => (pc, cycles) = self.ret_test(pc, self.cpu.z())?,
+            Rnz => (pc, cycles) = self.ret_test(pc, !self.cpu.z())?,
+            Rm => (pc, cycles) = self.ret_test(pc, self.cpu.s())?,
+            Rp => (pc, cycles) = self.ret_test(pc, !self.cpu.s())?,
+            Rpe => (pc, cycles) = self.ret_test(pc, self.cpu.p())?,
+            Rpo => (pc, cycles) = self.ret_test(pc, !self.cpu.p())?,
+            Rc => (pc, cycles) = self.ret_test(pc, self.cpu.cy())?,
+            Rnc => (pc, cycles) = self.ret_test(pc, !self.cpu.cy())?,
+
             Cma => *self.a_mut() = !self.a(),
             Push(rp) => self.push(rp)?,
             Pop(rp) => self.pop(rp)?,
             Cpi(byte) => self.cpi(byte),
-            Ret => pc = self.ret()?,
             Inx(rp) => self.inx(rp),
             Dcx(rp) => self.dcx(rp),
             Inr(reg) => self.incdec::<AddOp>(reg)?,
@@ -436,8 +342,6 @@ impl System {
             Lda(addr) => self.lda(addr)?,
             Dad(rp) => self.dad(rp),
             Lxi(rp, byte2, byte3) => self.lxi(rp, byte2, byte3),
-            Jmp(addr) => pc = addr,
-            Call(addr) => pc = self.call(addr, pc)?,
             Mvi(dst, val) => self.mvi(dst, val)?,
             Mov(dst, src) => self.mov(dst, src)?,
             Xchg => self.xchg(),
@@ -470,6 +374,7 @@ impl System {
             Rlc => self.rlc(),
             Lhld(addr) => self.lhld(addr)?,
             Shld(addr) => self.shld(addr)?,
+            Sphl => self.sphl(),
             Ei => self.cpu.inte = true,
             Di => self.cpu.inte = false,
             Pchl => pc = self.pchl(),
@@ -485,6 +390,30 @@ impl System {
             self.execute(instruction, io)
         } else {
             Ok(0)
+        }
+    }
+
+    fn jmp_test(&mut self, addr: u16, pc: u16, test: bool) -> u16 {
+        if test {
+            addr
+        } else {
+            pc
+        }
+    }
+
+    fn call_test(&mut self, addr: u16, pc: u16, test: bool) -> Result<(u16, u8)> {
+        if test {
+            Ok((self.call(addr, pc)?, 5))
+        } else {
+            Ok((pc, 0))
+        }
+    }
+
+    fn ret_test(&mut self, pc: u16, test: bool) -> Result<(u16, u8)> {
+        if test {
+            Ok((self.ret()?, 5))
+        } else {
+            Ok((pc, 0))
         }
     }
 
@@ -589,6 +518,10 @@ impl System {
         Ok(())
     }
 
+    fn sphl(&mut self) {
+        self.cpu.sp = self.get_rp(RegisterPair::H);
+    }
+
     fn pchl(&mut self) -> u16 {
         let pcl = self.cpu.get(Register::L) as u16;
         let pch = self.cpu.get(Register::H) as u16;
@@ -654,24 +587,34 @@ impl System {
     }
 
     fn inx(&mut self, rp: RegisterPair) {
-        let (h, l) = rp.split();
-        let l = self.cpu.get_mut(l);
-        if *l == 255 {
-            *l = 0;
-            *self.cpu.get_mut(h) += 1;
-        } else {
-            *l += 1;
+        match rp {
+            RegisterPair::SP => self.cpu.sp += 1,
+            rp => {
+                let (h, l) = rp.split();
+                let l = self.cpu.get_mut(l);
+                if *l == 255 {
+                    *l = 0;
+                    *self.cpu.get_mut(h) += 1;
+                } else {
+                    *l += 1;
+                }
+            }
         }
     }
 
     fn dcx(&mut self, rp: RegisterPair) {
-        let (h, l) = rp.split();
-        let l = self.cpu.get_mut(l);
-        if *l == 0 {
-            *l = 255;
-            *self.cpu.get_mut(h) = self.cpu.get(h).wrapping_sub(1);
-        } else {
-            *l -= 1;
+        match rp {
+            RegisterPair::SP => self.cpu.sp -= 1,
+            rp => {
+                let (h, l) = rp.split();
+                let l = self.cpu.get_mut(l);
+                if *l == 0 {
+                    *l = 255;
+                    *self.cpu.get_mut(h) = self.cpu.get(h).wrapping_sub(1);
+                } else {
+                    *l -= 1;
+                }
+            }
         }
     }
 
@@ -770,7 +713,10 @@ impl System {
     }
 
     fn get_rp(&self, rp: RegisterPair) -> u16 {
-        self.cpu.get_rp(rp)
+        match rp {
+            RegisterPair::SP => self.cpu.sp(),
+            rp => self.cpu.get_rp(rp),
+        }
     }
 
     pub fn get_slice(&self, addr: u16) -> Result<&[u8]> {

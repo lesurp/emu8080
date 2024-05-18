@@ -231,7 +231,6 @@ impl EmulatorClosureState {
         let mut cycles_done = 0;
         while cycles_done < cycles_to_do {
             let instruction = self.system.next_instruction().unwrap();
-            log_1(&format!("{:04x} {:04x?}", self.system.cpu().pc(), instruction).into());
             let instruction_cycles =
                 match self.system.execute(instruction, self.port_handler.as_ref()) {
                     Ok(i) => i as u64,
@@ -244,9 +243,6 @@ impl EmulatorClosureState {
             cycle_count += instruction_cycles;
             if cycle_count >= refresh_rate_irq_threshold {
                 let irq_instruction = Instruction::Rst(next_refresh_irq);
-                if self.system.cpu().inte() {
-                    log_1(&format!("{:04x} {:04x?}", self.system.cpu().pc(), instruction).into());
-                }
                 let incr = self
                     .system
                     .process(irq_instruction, self.port_handler.as_ref())

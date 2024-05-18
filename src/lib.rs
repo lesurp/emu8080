@@ -8,6 +8,3 @@ pub mod op_code;
 
 #[cfg(target_arch = "wasm32")]
 mod wasm;
-
-#[cfg(target_arch = "wasm32")]
-use wasm::*;
