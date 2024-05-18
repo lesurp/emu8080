@@ -1,4 +1,3 @@
-#![feature(split_at_checked)]
 #![feature(generic_arg_infer)]
 
 use anyhow::anyhow;
