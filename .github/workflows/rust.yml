@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  TOOLCHAIN_VERSION: nightly
 
 jobs:
   build:
@@ -18,8 +19,6 @@ jobs:
     - uses: actions/checkout@v4
     - name: Build
       run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh && wasm-pack build --target web
-      with:
-        toolchain: nightly
-        override: true
+
     - name: Run tests
       run: cargo test --verbose
