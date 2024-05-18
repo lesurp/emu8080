@@ -1,5 +1,5 @@
 use std::rc::Rc;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::AtomicU16;
 use std::{cell::RefCell, sync::Mutex};
 use wasm_bindgen::{prelude::*, Clamped};
 
@@ -12,37 +12,26 @@ use crate::{
 use web_sys::console::log_1;
 use web_sys::{CanvasRenderingContext2d, ImageData};
 
-#[repr(C)]
+#[derive(Eq, PartialEq)]
 enum RunState {
-    NotRunning = 0,
-    Running = 1,
-    Stopping = 2,
+    Running,
+    Stopping,
 }
 
-static STOP_FLAG: AtomicUsize = AtomicUsize::new(RunState::NotRunning as usize);
+static STOP_FLAG: Mutex<RunState> = Mutex::new(RunState::Stopping);
 
 fn stop_previous_game() {
-    use std::sync::atomic::Ordering::*;
-
-    match STOP_FLAG.swap(RunState::Stopping as usize, Acquire) {
-        0 => {
-            STOP_FLAG.store(RunState::Running as usize, Release);
-        }
-        1 => {
-            while let Err(_) = STOP_FLAG.compare_exchange(
-                RunState::NotRunning as usize,
-                RunState::Running as usize,
-                AcqRel,
-                Relaxed,
-            ) {}
-        }
-        _ => unreachable!(),
-    }
+    let mut l = STOP_FLAG.lock().unwrap();
+    *l = RunState::Stopping;
 }
 
 fn dump_state(system: &System) {
-    log_1(&format!("Dumping CPU state during execution error.").into());
-    log_1(&format!("Registers:").into());
+    log_1(
+        &"Dumping CPU state during execution error."
+            .to_string()
+            .into(),
+    );
+    log_1(&"Registers:".to_string().into());
     log_1(&format!("\tA: {:#04x}", system.cpu().get(Register::A)).into());
     log_1(&format!("\tF: {:#04x}", system.cpu().flags()).into());
     log_1(&format!("\tB: {:#04x}", system.cpu().get(Register::B)).into());
@@ -51,7 +40,7 @@ fn dump_state(system: &System) {
     log_1(&format!("\tE: {:#04x}", system.cpu().get(Register::E)).into());
     log_1(&format!("\tH: {:#04x}", system.cpu().get(Register::H)).into());
     log_1(&format!("\tL: {:#04x}", system.cpu().get(Register::L)).into());
-    log_1(&format!("Register pairs:").into());
+    log_1(&"Register pairs:".to_string().into());
     log_1(&format!("\tA: {:#06x}", system.cpu().psw()).into());
     log_1(&format!("\tB: {:#06x}", system.cpu().get_rp(RegisterPair::B)).into());
     log_1(&format!("\tD: {:#06x}", system.cpu().get_rp(RegisterPair::D)).into());
@@ -62,27 +51,42 @@ fn dump_state(system: &System) {
 
 #[derive(Default)]
 struct SpaceInvadersPorts {
-    ports: Mutex<[u8; 8]>,
+    in_ports: Mutex<[u8; 8]>,
+    out_ports: Mutex<[u8; 8]>,
+    shift_port: AtomicU16,
 }
 
 impl SpaceInvadersPorts {
     fn set_input_bit(&self, port: usize, bit: u8) {
-        self.ports.lock().unwrap()[port as usize] |= 1 << bit;
+        self.in_ports.lock().unwrap()[port] |= 1 << bit;
     }
 
     #[allow(dead_code)]
     fn clear_input_bit(&self, port: usize, bit: u8) {
-        self.ports.lock().unwrap()[port as usize] &= !(1 << bit);
+        self.in_ports.lock().unwrap()[port] &= !(1 << bit);
     }
 }
 
 impl InOut for SpaceInvadersPorts {
     fn write(&self, port: u8, value: u8) {
-        self.ports.lock().unwrap()[port as usize] = value;
+        if port == 4 {
+            let prev = self.shift_port.load(std::sync::atomic::Ordering::Relaxed);
+            let new = ((value as u16) << 8) + (prev >> 8);
+            self.shift_port
+                .store(new, std::sync::atomic::Ordering::Relaxed);
+        } else {
+            self.out_ports.lock().unwrap()[port as usize] = value;
+        }
     }
 
     fn read(&self, port: u8) -> u8 {
-        self.ports.lock().unwrap()[port as usize]
+        if port == 3 {
+            let val = self.shift_port.load(std::sync::atomic::Ordering::Relaxed);
+            let offset = self.out_ports.lock().unwrap()[2] & 0x07;
+            (val >> offset) as u8
+        } else {
+            self.in_ports.lock().unwrap()[port as usize]
+        }
     }
 }
 
@@ -133,6 +137,10 @@ fn canvas() -> web_sys::HtmlCanvasElement {
 #[wasm_bindgen]
 pub fn cpu_test() -> Result<(), JsValue> {
     stop_previous_game();
+    *STOP_FLAG.lock().unwrap() = RunState::Running;
+
+    let div = document().get_element_by_id("console").unwrap();
+    div.set_inner_html("");
 
     let mut ram = Ram::new(0x8000, true);
     let rom = include_bytes!("../roms/cputest");
@@ -173,11 +181,9 @@ pub fn cpu_test() -> Result<(), JsValue> {
     let f = Rc::new(RefCell::new(None));
     let g = f.clone();
     *g.borrow_mut() = Some(Closure::new(move |current_time: f64| {
-        if STOP_FLAG.load(std::sync::atomic::Ordering::Acquire) == RunState::Stopping as usize {
-            return STOP_FLAG.store(
-                RunState::NotRunning as usize,
-                std::sync::atomic::Ordering::Release,
-            );
+        let l = STOP_FLAG.lock().unwrap();
+        if *l == RunState::Stopping {
+            return;
         }
         emulator.game_js_loop(current_time);
         request_animation_frame(f.borrow().as_ref().unwrap());
@@ -208,8 +214,7 @@ impl EmulatorClosureState {
         let system_frequency = 2_000_000;
         let system_frequency_for_ms = system_frequency / 1000;
         let video_buffer_offset = 0x2400;
-        //let display_height = 224;
-        let display_width = 256;
+        let display_width = 224;
         let memory_width = 32;
         let memory_height = 224;
         let mut next_refresh_irq = 1;
@@ -230,7 +235,8 @@ impl EmulatorClosureState {
             let instruction = self.system.next_instruction().unwrap();
             let instruction_cycles =
                 match self.system.execute(instruction, self.port_handler.as_ref()) {
-                    Ok(i) => i as u64,
+                    Ok(None) => return,
+                    Ok(Some(i)) => i as u64,
                     Err(e) => {
                         dump_state(&self.system);
                         panic!("{}", e);
@@ -243,6 +249,7 @@ impl EmulatorClosureState {
                 let incr = self
                     .system
                     .process(irq_instruction, self.port_handler.as_ref())
+                    .unwrap()
                     .unwrap() as u64;
                 next_refresh_irq = if next_refresh_irq == 2 { 1 } else { 2 };
                 cycles_done += incr;
@@ -273,23 +280,54 @@ fn init() -> Result<(), JsValue> {
 }
 
 #[wasm_bindgen]
+pub fn stop() -> Result<(), JsValue> {
+    stop_previous_game();
+    Ok(())
+}
+
+#[wasm_bindgen]
 pub fn space_invaders() -> Result<(), JsValue> {
     stop_previous_game();
+    *STOP_FLAG.lock().unwrap() = RunState::Running;
+
     let port_handler = Rc::new(SpaceInvadersPorts::default());
+    port_handler.set_input_bit(0, 1);
+    port_handler.set_input_bit(0, 2);
+    port_handler.set_input_bit(0, 3);
+    port_handler.set_input_bit(1, 3);
 
     let canvas = canvas();
     let kb_clone = port_handler.clone();
-    let kb_closure = Closure::<dyn FnMut(_)>::new(move |event: web_sys::KeyboardEvent| {
-        log_1(&format!("Pressed: {:?}", event.key()).into());
+    let kb_closure_down = Closure::<dyn FnMut(_)>::new(move |event: web_sys::KeyboardEvent| {
         match event.key().as_str() {
+            "q" => kb_clone.set_input_bit(1, 5),
+            "e" => kb_clone.set_input_bit(1, 6),
+            "w" => kb_clone.set_input_bit(1, 4),
             "a" => kb_clone.set_input_bit(1, 0),
+            "s" => kb_clone.set_input_bit(1, 2),
             _ => {}
         }
     });
     canvas
-        .add_event_listener_with_callback("keydown", kb_closure.as_ref().unchecked_ref())
+        .add_event_listener_with_callback("keydown", kb_closure_down.as_ref().unchecked_ref())
         .unwrap();
-    kb_closure.forget();
+    kb_closure_down.forget();
+
+    let kb_clone = port_handler.clone();
+    let kb_closure_up = Closure::<dyn FnMut(_)>::new(move |event: web_sys::KeyboardEvent| {
+        match event.key().as_str() {
+            "q" => kb_clone.clear_input_bit(1, 5),
+            "e" => kb_clone.clear_input_bit(1, 6),
+            "w" => kb_clone.clear_input_bit(1, 4),
+            "a" => kb_clone.clear_input_bit(1, 0),
+            "s" => kb_clone.clear_input_bit(1, 2),
+            _ => {}
+        }
+    });
+    canvas
+        .add_event_listener_with_callback("keyup", kb_closure_up.as_ref().unchecked_ref())
+        .unwrap();
+    kb_closure_up.forget();
 
     let context = canvas
         .get_context("2d")
@@ -306,11 +344,9 @@ pub fn space_invaders() -> Result<(), JsValue> {
     let f = Rc::new(RefCell::new(None));
     let g = f.clone();
     *g.borrow_mut() = Some(Closure::new(move |current_time: f64| {
-        if STOP_FLAG.load(std::sync::atomic::Ordering::Acquire) == RunState::Stopping as usize {
-            return STOP_FLAG.store(
-                RunState::NotRunning as usize,
-                std::sync::atomic::Ordering::Release,
-            );
+        let l = STOP_FLAG.lock().unwrap();
+        if *l == RunState::Stopping {
+            return;
         }
         emulator.game_js_loop(current_time);
         request_animation_frame(f.borrow().as_ref().unwrap());
@@ -325,14 +361,17 @@ fn bitmap_to_rgba(bitmap: &[u8], w: usize, h: usize) -> Vec<u8> {
     let mut out = Vec::new();
     out.resize(number_pixels * 4, 255);
 
+    let display_width = w * 8;
+
     for y in 0..h {
         for x in 0..w {
             let byte = bitmap[y * w + x];
             for bit in 0..8 {
                 let is_set = 255 * ((byte & (1 << bit)) >> bit);
-                out[((y * w + x) * 8 + bit) * 4 + 0] = is_set;
-                out[((y * w + x) * 8 + bit) * 4 + 1] = is_set;
-                out[((y * w + x) * 8 + bit) * 4 + 2] = is_set;
+                let display_x = x * 8 + bit;
+                out[(y + h * (display_width - 1 - display_x)) * 4] = is_set;
+                out[(y + h * (display_width - 1 - display_x)) * 4 + 1] = is_set;
+                out[(y + h * (display_width - 1 - display_x)) * 4 + 2] = is_set;
             }
         }
     }

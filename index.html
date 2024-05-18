@@ -4,19 +4,21 @@
     </head>
     <body>
         <script type="module">
-            import init, { space_invaders, cpu_test } from './pkg/emulator101.js';
+            import init, { space_invaders, cpu_test, stop } from './pkg/emulator8080.js';
             async function run() {
                 await init();
                 document.getElementById("space_invaders").addEventListener('click', space_invaders);
                 document.getElementById("cpu_test").addEventListener('click', cpu_test);
+                document.getElementById("stop").addEventListener('click', stop);
             }
             run();
         </script>
         <div>
             <button id="space_invaders">Space Invaders</button>
             <button id="cpu_test">CPU Test</button>
+            <button id="stop">Stop</button>
         </div>
-        <canvas tabindex='1' id="canvas" width="256" height="224"></canvas>
+        <canvas tabindex='1' id="canvas" width="224" height="256"></canvas>
         <div id="console"></div>
     </body>
 </html>

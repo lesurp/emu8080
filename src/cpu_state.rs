@@ -294,7 +294,7 @@ impl System {
         Instruction::read_at(&self.ram.ram, self.cpu.pc)
     }
 
-    pub fn execute(&mut self, instruction: Instruction, io: &dyn InOut) -> Result<u8> {
+    pub fn execute(&mut self, instruction: Instruction, io: &dyn InOut) -> Result<Option<u8>> {
         use Instruction::*;
         let mut pc = self.cpu.pc + instruction.size();
         let mut cycles = instruction.cycles();
@@ -380,17 +380,18 @@ impl System {
             Di => self.cpu.inte = false,
             Pchl => pc = self.pchl(),
             Rst(value) => pc = self.call(8 * value as u16, pc)?,
-            _ => return Err(MemoryError::NotImplementedInstruction(instruction)),
+            Hlt => return Ok(None),
         }
         self.cpu.pc = pc;
-        Ok(cycles)
+        Ok(Some(cycles))
     }
 
-    pub fn process(&mut self, instruction: Instruction, io: &dyn InOut) -> Result<u8> {
+    pub fn process(&mut self, instruction: Instruction, io: &dyn InOut) -> Result<Option<u8>> {
         if self.cpu.inte {
+            self.cpu.pc -= instruction.size();
             self.execute(instruction, io)
         } else {
-            Ok(0)
+            Ok(Some(0))
         }
     }
 
